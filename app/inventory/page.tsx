@@ -20,7 +20,6 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { Search, Plus, Edit, AlertTriangle, Package, TrendingUp, TrendingDown } from "lucide-react"
-
 // Mock supply data based on database schema
 const mockSupplies = [
   {
@@ -180,9 +179,10 @@ export default function InventoryPage() {
     <div className="space-y-6 p-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div>
+        <div className="flex items-center space-x-3">
+          
+        <Package className="h-6 w-6 text-primary " />
           <h1 className="text-3xl font-bold tracking-tight">Inventory Management</h1>
-          <p className="text-muted-foreground">Manage medical supplies and track inventory levels</p>
         </div>
         <div className="flex space-x-2">
           <Dialog open={showAddTransaction} onOpenChange={setShowAddTransaction}>

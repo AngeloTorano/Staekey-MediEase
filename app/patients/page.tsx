@@ -162,13 +162,13 @@ export default function PatientsPage() {
         (patient?.shf_id?.toLowerCase() || "").includes(searchTerm.toLowerCase())
 
       const matchesGender = filterGender === "All Genders" || patient?.gender === filterGender
-    
+
       const matchesEmployment = filterEmployment === "All Employment" || patient?.employment_status === filterEmployment
 
       // Student filter logic
       const isStudent = !!patient?.school_name
-      const matchesStudent = 
-        filterStudent === "All Students" || 
+      const matchesStudent =
+        filterStudent === "All Students" ||
         (filterStudent === "Student" && isStudent) ||
         (filterStudent === "Non-Student" && !isStudent)
 
@@ -242,14 +242,13 @@ export default function PatientsPage() {
           <Users className="h-6 w-6 text-primary" />
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Patient Management</h1>
-            <p className="text-muted-foreground">Manage patient records and information</p>
           </div>
         </div>
         <Dialog open={showAddPatient} onOpenChange={handleDialogOpenChange}>
           <DialogTrigger asChild>
             <Button>
               <Plus className="h-4 w-4 mr-2" />
-              Add Patient
+              Add New Patient
             </Button>
           </DialogTrigger>
           <DialogContent size="3xl" className="max-h-[85vh] overflow-y-auto">
@@ -340,38 +339,38 @@ export default function PatientsPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-<div className="space-y-2">
-  <Label htmlFor="region_district">Region/District</Label>
-  <select
-    id="region_district"
-    value={newPatient.region_district}
-    onChange={(e) =>
-      setNewPatient((prev) => ({ ...prev, region_district: e.target.value }))
-    }
-    className="w-full p-2 border rounded-md"
-  >
-    <option value="">Select Region</option>
-    <option value="National Capital Region (NCR)">National Capital Region (NCR)</option>
-    <option value="Cordillera Administrative Region (CAR)">Cordillera Administrative Region (CAR)</option>
-    <option value="Ilocos Region (Region I)">Ilocos Region (Region I)</option>
-    <option value="Cagayan Valley (Region II)">Cagayan Valley (Region II)</option>
-    <option value="Central Luzon (Region III)">Central Luzon (Region III)</option>
-    <option value="CALABARZON (Region IV-A)">CALABARZON (Region IV-A)</option>
-    <option value="MIMAROPA (Region IV-B)">MIMAROPA (Region IV-B)</option>
-    <option value="Bicol Region (Region V)">Bicol Region (Region V)</option>
-    <option value="Western Visayas (Region VI)">Western Visayas (Region VI)</option>
-    <option value="Central Visayas (Region VII)">Central Visayas (Region VII)</option>
-    <option value="Eastern Visayas (Region VIII)">Eastern Visayas (Region VIII)</option>
-    <option value="Zamboanga Peninsula (Region IX)">Zamboanga Peninsula (Region IX)</option>
-    <option value="Northern Mindanao (Region X)">Northern Mindanao (Region X)</option>
-    <option value="Davao Region (Region XI)">Davao Region (Region XI)</option>
-    <option value="SOCCSKSARGEN (Region XII)">SOCCSKSARGEN (Region XII)</option>
-    <option value="Caraga (Region XIII)">Caraga (Region XIII)</option>
-    <option value="Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)">
-      Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)
-    </option>
-  </select>
-</div>
+                <div className="space-y-2">
+                  <Label htmlFor="region_district">Region/District</Label>
+                  <select
+                    id="region_district"
+                    value={newPatient.region_district}
+                    onChange={(e) =>
+                      setNewPatient((prev) => ({ ...prev, region_district: e.target.value }))
+                    }
+                    className="w-full p-2 border rounded-md"
+                  >
+                    <option value="">Select Region</option>
+                    <option value="National Capital Region (NCR)">National Capital Region (NCR)</option>
+                    <option value="Cordillera Administrative Region (CAR)">Cordillera Administrative Region (CAR)</option>
+                    <option value="Ilocos Region (Region I)">Ilocos Region (Region I)</option>
+                    <option value="Cagayan Valley (Region II)">Cagayan Valley (Region II)</option>
+                    <option value="Central Luzon (Region III)">Central Luzon (Region III)</option>
+                    <option value="CALABARZON (Region IV-A)">CALABARZON (Region IV-A)</option>
+                    <option value="MIMAROPA (Region IV-B)">MIMAROPA (Region IV-B)</option>
+                    <option value="Bicol Region (Region V)">Bicol Region (Region V)</option>
+                    <option value="Western Visayas (Region VI)">Western Visayas (Region VI)</option>
+                    <option value="Central Visayas (Region VII)">Central Visayas (Region VII)</option>
+                    <option value="Eastern Visayas (Region VIII)">Eastern Visayas (Region VIII)</option>
+                    <option value="Zamboanga Peninsula (Region IX)">Zamboanga Peninsula (Region IX)</option>
+                    <option value="Northern Mindanao (Region X)">Northern Mindanao (Region X)</option>
+                    <option value="Davao Region (Region XI)">Davao Region (Region XI)</option>
+                    <option value="SOCCSKSARGEN (Region XII)">SOCCSKSARGEN (Region XII)</option>
+                    <option value="Caraga (Region XIII)">Caraga (Region XIII)</option>
+                    <option value="Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)">
+                      Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)
+                    </option>
+                  </select>
+                </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="city_village">City/Village</Label>
@@ -386,7 +385,7 @@ export default function PatientsPage() {
               {/* Employment Status Section */}
               <div className="space-y-4 pt-2">
                 <h3 className="text-lg font-medium">Employment & Education</h3>
-                
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="employment_status">Employment Status</Label>

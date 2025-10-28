@@ -810,7 +810,6 @@ export default function AdminPage() {
           {/* Filters / Search */}
           <div className="flex flex-col md:flex-row md:items-end md:space-x-4 gap-3">
             <div className="flex-1">
-              <Label className="mb-2">Search</Label>
               <Input
                 placeholder="Search..."
                 value={auditSearch}

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import axios from "axios";
-import { MapPin, Users, AlertCircle } from "lucide-react";
+import { Users, AlertCircle } from "lucide-react";
 import {
   Card,
   CardHeader,
@@ -261,7 +261,7 @@ map.setMaxBounds(bounds);
     el.style.cssText = `
       width: 20px;
       height: 20px;
-      background: ${count > 0 ? "#000000ff" : "#ffffffff"};
+      background: ${count > 0 ? "#000000ff" : "#bdb1b1ff"};
       border: 3px solid white;
       border-radius: 50%;
       cursor: pointer;
@@ -271,7 +271,7 @@ map.setMaxBounds(bounds);
       font-weight: bold;
       color: white;
       font-size: 12px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      box-shadow: 0 2px 8px rgba(255, 255, 255, 0.3);
       transition: transform 0.15s;
     `;
     return el;
@@ -305,7 +305,7 @@ map.setMaxBounds(bounds);
   const topRegion = getTopRegion();
   
   return (
-    <div className="flex gap-4 h-[650px] bg-gray-50 p-4">
+    <div className="flex gap-4 h-[630px] bg-gray-50 p-0">
       {/* Left: Map Card (3/4 of the screen) */}
       <div className="flex-1 relative rounded-lg overflow-hidden shadow bg-white">
         {loading && (

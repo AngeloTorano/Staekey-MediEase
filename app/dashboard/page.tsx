@@ -102,7 +102,7 @@ export default function ReportsPage() {
         <div className="flex items-center space-x-3">
           <BarChart3 className="h-6 w-6 text-primary" />
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
           </div>
         </div>
       </div>
