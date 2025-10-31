@@ -1,110 +1,110 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import axios from "axios"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-} from "recharts"
-import { Download, FileText, BarChart3, Users, Calendar } from "lucide-react"
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import { Download, FileText, BarChart3, Upload } from "lucide-react"
+import { useDropzone } from "react-dropzone"
 
-// Axios instance for API calls
+// Axios instance
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL,
   withCredentials: true,
 })
 
 export default function ReportsPage() {
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Filter states
-  const [dateRange, setDateRange] = useState("last-6-months")
-  const [reportType, setReportType] = useState("all")
-  const [selectedRegion, setSelectedRegion] = useState("all")
+  // Modals
+  const [openGenerateModal, setOpenGenerateModal] = useState(false)
+  const [openCustomModal, setOpenCustomModal] = useState(false)
 
-  // Data states
-  const [summary, setSummary] = useState<any>(null)
-  const [demographics, setDemographics] = useState<any>(null)
-  const [medical, setMedical] = useState<any>(null)
-  const [performance, setPerformance] = useState<any>(null)
+  const [selectedPhase, setSelectedPhase] = useState<string>("")
+  const [selectedFileType, setSelectedFileType] = useState("csv")
 
-  useEffect(() => {
-    const token =
-      typeof window !== "undefined"
-        ? sessionStorage.getItem("token") || localStorage.getItem("token")
-        : null
-    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+  // Custom report filters
+  const [filterGender, setFilterGender] = useState("all")
+  const [filterCity, setFilterCity] = useState("all")
+  const [customStartDate, setCustomStartDate] = useState("")
+  const [customEndDate, setCustomEndDate] = useState("")
 
-    const fetchReports = async () => {
-      try {
-        setLoading(true)
-        const [summaryRes, demoRes, medRes, supRes, perfRes] = await Promise.all([
-          api.get("/api/reports/summary", { headers }),
-          api.get("/api/reports/demographics", { headers }),
-          api.get("/api/reports/medical", { headers }),
-          api.get("/api/reports/supplies", { headers }),
-          api.get("/api/reports/performance", { headers }),
-        ])
+  const handleExportReport = (phase: string, format: string) => {
+    console.log(`Generating ${format.toUpperCase()} report for ${phase}`)
+  }
 
-        setSummary(summaryRes.data)
-        setDemographics(demoRes.data)
-        setMedical(medRes.data)
-        setPerformance(perfRes.data)
-      } catch (err) {
-        console.error("Error fetching reports:", err)
-        setError("Failed to load reports.")
-      } finally {
-        setLoading(false)
-      }
+  const openGenerateReportModal = (phase: string) => {
+    setSelectedPhase(phase)
+    setOpenGenerateModal(true)
+  }
+
+  const openCustomReportModal = (phase: string) => {
+    setSelectedPhase(phase)
+    setOpenCustomModal(true)
+  }
+
+  const handleConfirmGenerate = () => {
+    handleExportReport(selectedPhase, selectedFileType)
+    setOpenGenerateModal(false)
+  }
+
+  const handleConfirmCustom = () => {
+    console.log(
+      `Generating CUSTOM ${selectedFileType.toUpperCase()} report for ${selectedPhase}
+      Filters: Gender=${filterGender}, City=${filterCity}, Date Range=${customStartDate} to ${customEndDate}`
+    )
+    setOpenCustomModal(false)
+  }
+
+  // File upload logic
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null)
+
+  const onDrop = (acceptedFiles: File[]) => {
+    if (acceptedFiles && acceptedFiles.length > 0) {
+      setUploadedFile(acceptedFiles[0])
+      console.log("File uploaded:", acceptedFiles[0])
     }
+  }
 
-    fetchReports()
-  }, [])
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    multiple: false,
+    accept: {
+      "text/csv": [".csv"],
+      "application/pdf": [".pdf"],
+    },
+  })
 
-  // Extract data safely
-  const totalPatients = summary?.total_patients ?? 0
-  const totalFittings = summary?.total_fittings ?? 0
-  const totalMissions = summary?.total_missions ?? 0
-
-  const patientDemographics =
-    demographics?.age_groups?.map((r: any) => ({ ageGroup: r.age_group, count: Number(r.count) })) || []
-
-  type GenderEntry = { name: string; value: number; color: string }
-
-  const genderDistribution: GenderEntry[] =
-    demographics?.genders?.map((g: any) => ({
-      name: g.gender,
-      value: Number(g.count),
-      color: g.gender === "Male" ? "#0044ffff" : "#ec4899",
-    })) || []
-
-  const hearingLossCauses =
-    medical?.hearing_loss_causes?.map((r: any) => ({ cause: r.cause, count: Number(r.count) })) || []
-
-  const treatmentOutcomes: { phase_name: string; completed: number }[] =
-    medical?.treatment_outcomes?.map((r: any) => ({
-      phase_name: r.phase_name,
-      completed: Number(r.completed || 0),
-    })) || []
-
-  const handleExportReport = (format: string) => {
-    console.log(`Exporting report in ${format}`)
+  const handleImportFile = () => {
+    if (!uploadedFile) {
+      alert("Please upload a file first!")
+      return
+    }
+    console.log("Importing file:", uploadedFile.name)
   }
 
   return (
@@ -114,247 +114,208 @@ export default function ReportsPage() {
         <div className="flex items-center space-x-3">
           <BarChart3 className="h-6 w-6 text-primary" />
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Reports & Analytics</h1>
-            <p className="text-muted-foreground">Comprehensive insights and data visualization</p>
+            <h1 className="text-2xl font-bold tracking-tight">
+              Reports
+            </h1>
           </div>
-        </div>
-        <div className="flex space-x-2">
-          <Button variant="outline" onClick={() => handleExportReport("csv")} disabled={loading}>
-            <Download className="h-4 w-4 mr-2" />
-            Export CSV
-          </Button>
-          <Button variant="outline" onClick={() => handleExportReport("pdf")} disabled={loading}>
-            <FileText className="h-4 w-4 mr-2" />
-            Export PDF
-          </Button>
         </div>
       </div>
 
       {error && <div className="text-red-600">{error}</div>}
 
-      {/* Filters */}
-      <Card>
+      {/* Phase Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {["Phase 1", "Phase 2", "Phase 3"].map((phase) => (
+          <Card
+            key={phase}
+            className="hover:shadow-lg transition-shadow cursor-pointer"
+          >
+            <CardHeader>
+              <CardTitle>{phase}</CardTitle>
+              <CardDescription>
+                Generate or customize reports for {phase.toLowerCase()}.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Button
+                className="w-full"
+                onClick={() => openGenerateReportModal(phase)}
+                disabled={loading}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Generate Report
+              </Button>
+              <Button
+                className="w-full"
+                variant="outline"
+                onClick={() => openCustomReportModal(phase)}
+                disabled={loading}
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                Custom Report
+              </Button>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* File Upload Section */}
+      <Card className="mt-6">
         <CardHeader>
-          <CardTitle>Report Filters</CardTitle>
-          <CardDescription>Customize your report parameters</CardDescription>
+          <CardTitle>Import File</CardTitle>
+          <CardDescription>
+            Drag and drop your file below or click to upload.
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="space-y-2">
-              <Label>Date Range</Label>
-              <Select value={dateRange} onValueChange={setDateRange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select date range" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="last-month">Last Month</SelectItem>
-                  <SelectItem value="last-3-months">Last 3 Months</SelectItem>
-                  <SelectItem value="last-6-months">Last 6 Months</SelectItem>
-                  <SelectItem value="last-year">Last Year</SelectItem>
-                  <SelectItem value="all-time">All Time</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Report Type</Label>
-              <Select value={reportType} onValueChange={setReportType}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select report type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Reports</SelectItem>
-                  <SelectItem value="demographics">Demographics</SelectItem>
-                  <SelectItem value="medical">Medical</SelectItem>
-                  <SelectItem value="satisfaction">Satisfaction</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Region</Label>
-              <Select value={selectedRegion} onValueChange={setSelectedRegion}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select region" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Regions</SelectItem>
-                  <SelectItem value="ncr">NCR</SelectItem>
-                  <SelectItem value="central-visayas">Central Visayas</SelectItem>
-                  <SelectItem value="davao">Davao Region</SelectItem>
-                  <SelectItem value="calabarzon">Calabarzon</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+          <div
+            {...getRootProps()}
+            className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition 
+              ${isDragActive ? "border-primary bg-muted" : "border-gray-300"}`}
+          >
+            <input {...getInputProps()} />
+            {uploadedFile ? (
+              <p className="text-sm text-gray-700">
+                Uploaded: <strong>{uploadedFile.name}</strong>
+              </p>
+            ) : isDragActive ? (
+              <p className="text-gray-700">Drop your file here...</p>
+            ) : (
+              <div className="flex flex-col items-center space-y-2">
+                <Upload className="h-8 w-8 text-gray-500" />
+                <p className="text-gray-600 text-sm">
+                  Drag & drop or click to upload (CSV or PDF)
+                </p>
+              </div>
+            )}
+          </div>
+          <div className="mt-4 flex justify-end">
+            <Button onClick={handleImportFile} disabled={!uploadedFile}>
+              Import File
+            </Button>
           </div>
         </CardContent>
       </Card>
 
-      {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Total Patients Served</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{totalPatients}</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Hearing Aids Fitted</CardTitle>
-            <BarChart3 className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{totalFittings}</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Missions Completed</CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{totalMissions}</div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Chart Tabs */}
-      <Tabs defaultValue="demographics" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="demographics">Demographics</TabsTrigger>
-          <TabsTrigger value="medical">Medical</TabsTrigger>
-          <TabsTrigger value="satisfaction">Performance</TabsTrigger>
-        </TabsList>
-
-        {/* Demographics Tab */}
-        <TabsContent value="demographics">
-          <div className="grid gap-6 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Age Distribution</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={patientDemographics}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="ageGroup" />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="count" fill="#8b5cf6"/>
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Gender Distribution</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={genderDistribution}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={100}
-                      outerRadius={150}
-                      dataKey="value"
-                      label
-                    >
-                      {genderDistribution.map((entry, index) => (
-                        <Cell key={index} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
+      {/* Generate Report Modal */}
+      <Dialog open={openGenerateModal} onOpenChange={setOpenGenerateModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Generate Report - {selectedPhase}</DialogTitle>
+            <DialogDescription>
+              Choose the file type for your report.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>File Type</Label>
+            <Select value={selectedFileType} onValueChange={setSelectedFileType}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select file type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="csv">CSV</SelectItem>
+                <SelectItem value="pdf">PDF</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-        </TabsContent>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpenGenerateModal(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmGenerate}>Generate</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-        {/* Medical Tab */}
-        <TabsContent value="medical">
-          <div className="grid gap-6 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Hearing Loss Causes</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {hearingLossCauses.length === 0 ? (
-                  <div className="p-6 text-center text-sm text-muted-foreground">No hearing loss cause data available</div>
-                ) : (
-                  <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={hearingLossCauses} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" />
-                      <YAxis dataKey="cause" type="category" width={150} />
-                      <Tooltip />
-                      <Bar dataKey="count" fill="#f59e0b" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                )}
-              </CardContent>
-            </Card>
+      {/* Custom Report Modal */}
+      <Dialog open={openCustomModal} onOpenChange={setOpenCustomModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Custom Report - {selectedPhase}</DialogTitle>
+            <DialogDescription>
+              Set filters and file type for your report.
+            </DialogDescription>
+          </DialogHeader>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Treatment Outcomes</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {treatmentOutcomes.length === 0 ? (
-                  <div className="p-6 text-center text-sm text-muted-foreground">No treatment outcomes data available</div>
-                ) : (
-                  <ResponsiveContainer width="100%" height={300}>
-                    <PieChart>
-                      <Pie
-                        data={treatmentOutcomes.map((r) => ({ name: r.phase_name, value: Number(r.completed || 0) }))}
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={80}
-                        dataKey="value"
-                      >
-                        {treatmentOutcomes.map((_, index: number) => (
-                          <Cell key={index} fill={["#4ade80", "#f59e0b", "#8b5cf6", "#6b7280"][index % 4]} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
-                )}
-              </CardContent>
-            </Card>
+          <div className="space-y-4">
+            {/* Gender Filter */}
+            <div className="space-y-2">
+              <Label>Filter by Gender</Label>
+              <Select value={filterGender} onValueChange={setFilterGender}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select gender" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="male">Male</SelectItem>
+                  <SelectItem value="female">Female</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Aftercare City Filter */}
+            <div className="space-y-2">
+              <Label>Filter by Aftercare City</Label>
+              <Select value={filterCity} onValueChange={setFilterCity}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select city" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="manila">Manila</SelectItem>
+                  <SelectItem value="cebu">Cebu</SelectItem>
+                  <SelectItem value="davao">Davao</SelectItem>
+                  <SelectItem value="lipa">Lipa</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Specific Date Range */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Start Date</Label>
+                <Input
+                  type="date"
+                  value={customStartDate}
+                  onChange={(e) => setCustomStartDate(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>End Date</Label>
+                <Input
+                  type="date"
+                  value={customEndDate}
+                  onChange={(e) => setCustomEndDate(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* File Type */}
+            <div className="space-y-2">
+              <Label>File Type</Label>
+              <Select
+                value={selectedFileType}
+                onValueChange={setSelectedFileType}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select file type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="csv">CSV</SelectItem>
+                  <SelectItem value="pdf">PDF</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-        </TabsContent>
 
-        {/* Performance Tab */}
-        <TabsContent value="satisfaction">
-          <Card>
-            <CardHeader>
-              <CardTitle>Mission Performance</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {performance?.length ? (
-                performance.map((row: any) => (
-                  <div key={row.phase_name} className="flex justify-between items-center p-3 border rounded mb-2">
-                    <div>
-                      <div className="font-medium">{row.phase_name}</div>
-                      <div className="text-sm text-muted-foreground">{row.patients_served} patients</div>
-                    </div>
-                    <Badge variant="secondary">{row.success_rate}% success</Badge>
-                  </div>
-                ))
-              ) : (
-                <p className="text-muted-foreground text-sm">No performance data available</p>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpenCustomModal(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmCustom}>Generate Custom Report</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

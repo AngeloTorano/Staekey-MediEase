@@ -1,12 +1,13 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import Image from "next/image"
+import axios from "axios"
 import {
   Heart,
   Users,
@@ -15,12 +16,12 @@ import {
   BarChart3,
   Settings,
   Calendar,
-  Map,
-  MessageSquare,
   ChevronLeft,
   ChevronRight,
   LogOut,
+  Bell, // added
 } from "lucide-react"
+import { decryptObject } from "@/utils/decrypt" // decrypt helper
 
 interface SidebarProps {
   userRole: string
@@ -53,12 +54,6 @@ export const NAV_ITEMS = [
     roles: ["Admin", "Country Coordinator", "City Coordinator"],
   },
   {
-    title: "SMS Outreach",
-    href: "/sms",
-    icon: MessageSquare,
-    roles: ["Admin", "Country Coordinator", "City Coordinator"],
-  },
-  {
     title: "Inventory",
     href: "/inventory",
     icon: Package,
@@ -84,7 +79,16 @@ export const NAV_ITEMS = [
   },
 ]
 
-export function Sidebar({ userRole, collapsed: collapsedProp, setCollapsed: setCollapsedProp }: SidebarProps) {
+const api = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_URL,
+  headers: {
+    "Content-Type": "application/json",
+  },
+  timeout: 10000,
+  withCredentials: true,
+})
+
+export function Sidebar({ collapsed: collapsedProp, setCollapsed: setCollapsedProp }: SidebarProps) {
   const [internalCollapsed, setInternalCollapsed] = useState(false)
   const collapsed = typeof collapsedProp === "boolean" ? collapsedProp : internalCollapsed
   const setCollapsed = setCollapsedProp ?? setInternalCollapsed
@@ -95,6 +99,43 @@ export function Sidebar({ userRole, collapsed: collapsedProp, setCollapsed: setC
   const navigationItems = NAV_ITEMS
 
   const filteredItems = navigationItems.filter((item) => item.roles.includes(sessionStorage.getItem("userRole") || "Admin"))
+
+  // New: low stock badge count
+  const [lowStockCount, setLowStockCount] = useState<number>(0)
+
+  useEffect(() => {
+    let mounted = true
+    const fetchLowStock = async () => {
+      try {
+        const token = typeof window !== "undefined" ? sessionStorage.getItem("token") || localStorage.getItem("token") : null
+        // request low-stock supplies (server supports low_stock=true)
+        const res = await api.get("/api/supplies", {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          params: { low_stock: true, limit: 1000 },
+        })
+
+        let payload: any = null
+        if (res.data?.encrypted_data) {
+          payload = decryptObject(res.data.encrypted_data)
+        } else {
+          payload = res.data?.data ?? res.data
+        }
+
+        const count = Array.isArray(payload) ? payload.length : 0
+        if (mounted) setLowStockCount(count)
+      } catch (err) {
+        console.warn("Failed to fetch low stock count", err)
+      }
+    }
+
+    fetchLowStock()
+    // optional: poll every minute
+    const id = setInterval(fetchLowStock, 60_000)
+    return () => {
+      mounted = false
+      clearInterval(id)
+    }
+  }, [])
 
   return (
     <div
@@ -143,8 +184,24 @@ export function Sidebar({ userRole, collapsed: collapsedProp, setCollapsed: setC
                   variant={isActive ? "default" : "ghost"}
                   className={cn("w-full justify-start text-lg", collapsed && "px-2")}
                 >
-                  <Icon className={cn("h-8 w-8", !collapsed && "mr-2")} />
-                  {!collapsed && <span>{item.title}</span>}
+                  <div className="flex items-center w-full justify-between">
+                    <div className="flex items-center">
+                      <Icon className={cn("h-8 w-8", !collapsed && "mr-2")} />
+                      {!collapsed && <span>{item.title}</span>}
+                    </div>
+
+                    {/* Show bell + count for Inventory item */}
+                    {!collapsed && item.title === "Inventory" && lowStockCount > 0 && (
+                      <div className="flex items-center space-x-2">
+                        <Bell className="h-5 w-5 stroke-red-500 fill-red-500" />
+                        <div className="text-xs font-semibold text-destructive">{lowStockCount}</div>
+                      </div>
+                    )}
+
+                    {collapsed && item.title === "Inventory" && lowStockCount > 0 && (
+                      <Bell className="h-5 w-5 stroke-red-500 fill-red-500" />
+                    )}
+                  </div>
                 </Button>
               </Link>
             )

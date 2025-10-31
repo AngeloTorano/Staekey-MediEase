@@ -52,8 +52,9 @@ export default function PatientsPage() {
   const [patients, setPatients] = useState<any[]>([])
   const [searchTerm, setSearchTerm] = useState("")
   const [filterGender, setFilterGender] = useState("All Genders")
-  const [filterEmployment, setFilterEmployment] = useState("All Employment")
-  const [filterStudent, setFilterStudent] = useState("All Students")
+  const [filterStartDate, setFilterStartDate] = useState<string>("")
+  const [filterEndDate, setFilterEndDate] = useState<string>("")
+  // removed employment/student filters; replaced table columns with Date Added
   const [showAddPatient, setShowAddPatient] = useState(false)
   const [selectedPatient, setSelectedPatient] = useState<any>(null)
   const [newPatient, setNewPatient] = useState(INITIAL_PATIENT_STATE)
@@ -62,6 +63,12 @@ export default function PatientsPage() {
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const formatDate = (value: any) => {
+    if (!value) return "—"
+    const d = new Date(value)
+    return isNaN(d.getTime()) ? String(value) : d.toLocaleDateString()
+  }
 
   // Fetch patients from backend
   useEffect(() => {
@@ -150,30 +157,41 @@ export default function PatientsPage() {
     }
   }
 
-  // Filter patients
-  const filteredPatients = patients
-    .filter((patient) => {
-      if (!patient) return false
+  // Filter patients (keep gender/search and add date range filter for Date Added)
+  const filteredPatients = patients.filter((patient) => {
+    if (!patient) return false
 
-      const matchesSearch =
-        (patient?.last_name?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
-        (patient?.gender?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
-        (patient?.first_name?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
-        (patient?.shf_id?.toLowerCase() || "").includes(searchTerm.toLowerCase())
+    const matchesSearch =
+      (patient?.last_name?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
+      (patient?.gender?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
+      (patient?.first_name?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
+      (patient?.shf_id?.toLowerCase() || "").includes(searchTerm.toLowerCase())
 
-      const matchesGender = filterGender === "All Genders" || patient?.gender === filterGender
+    const matchesGender = filterGender === "All Genders" || patient?.gender === filterGender
 
-      const matchesEmployment = filterEmployment === "All Employment" || patient?.employment_status === filterEmployment
+    // Date range filter on patient.date_added / created_at / createdAt
+    const dateValue = patient?.date_added || patient?.created_at || patient?.createdAt || null
+    let withinDateRange = true
+    if (filterStartDate || filterEndDate) {
+      const d = dateValue ? new Date(dateValue) : null
+      if (!d || isNaN(d.getTime())) {
+        withinDateRange = false
+      } else {
+        if (filterStartDate) {
+          const start = new Date(filterStartDate)
+          start.setHours(0, 0, 0, 0)
+          if (d < start) withinDateRange = false
+        }
+        if (filterEndDate) {
+          const end = new Date(filterEndDate)
+          end.setHours(23, 59, 59, 999)
+          if (d > end) withinDateRange = false
+        }
+      }
+    }
 
-      // Student filter logic
-      const isStudent = !!patient?.school_name
-      const matchesStudent =
-        filterStudent === "All Students" ||
-        (filterStudent === "Student" && isStudent) ||
-        (filterStudent === "Non-Student" && !isStudent)
-
-      return matchesSearch && matchesGender && matchesEmployment && matchesStudent
-    })
+    return matchesSearch && matchesGender && withinDateRange
+  })
 
   // Add patient handler
   const handleAddPatient = (e: React.FormEvent) => {
@@ -244,235 +262,6 @@ export default function PatientsPage() {
             <h1 className="text-3xl font-bold tracking-tight">Patient Management</h1>
           </div>
         </div>
-        <Dialog open={showAddPatient} onOpenChange={handleDialogOpenChange}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              Add New Patient
-            </Button>
-          </DialogTrigger>
-          <DialogContent size="3xl" className="max-h-[85vh] overflow-y-auto">
-            <DialogHeader className="px-6 pt-6 pb-4 border-b">
-              <DialogTitle className="text-2xl">Register New Patient</DialogTitle>
-              <DialogDescription className="text-sm">
-                Enter patient demographic information
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleAddPatient} className="space-y-4 p-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="last_name">Last Name *</Label>
-                  <Input
-                    id="last_name"
-                    value={newPatient.last_name}
-                    onChange={(e) => setNewPatient((prev) => ({ ...prev, last_name: e.target.value }))}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="first_name">First Name *</Label>
-                  <Input
-                    id="first_name"
-                    value={newPatient.first_name}
-                    onChange={(e) => setNewPatient((prev) => ({ ...prev, first_name: e.target.value }))}
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="gender">Gender *</Label>
-                  <Select
-                    value={newPatient.gender}
-                    onValueChange={(value) => setNewPatient((prev) => ({ ...prev, gender: value }))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select gender" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Male">Male</SelectItem>
-                      <SelectItem value="Female">Female</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="date_of_birth">Date of Birth *</Label>
-                  <Input
-                    id="date_of_birth"
-                    type="date"
-                    value={newPatient.date_of_birth}
-                    onChange={(e) => setNewPatient((prev) => ({ ...prev, date_of_birth: e.target.value }))}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="age">Age</Label>
-                  <Input
-                    id="age"
-                    type="number"
-                    value={newPatient.age}
-                    onChange={(e) => setNewPatient((prev) => ({ ...prev, age: e.target.value }))}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="mobile_number">Mobile Number</Label>
-                  <Input
-                    id="mobile_number"
-                    value={newPatient.mobile_number}
-                    onChange={(e) => setNewPatient((prev) => ({ ...prev, mobile_number: e.target.value }))}
-                    placeholder="+63912345678"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="alternative_number">Alternative Number</Label>
-                  <Input
-                    id="alternative_number"
-                    value={newPatient.alternative_number}
-                    onChange={(e) => setNewPatient((prev) => ({ ...prev, alternative_number: e.target.value }))}
-                    placeholder="+63923456789"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="region_district">Region/District</Label>
-                  <select
-                    id="region_district"
-                    value={newPatient.region_district}
-                    onChange={(e) =>
-                      setNewPatient((prev) => ({ ...prev, region_district: e.target.value }))
-                    }
-                    className="w-full p-2 border rounded-md"
-                  >
-                    <option value="">Select Region</option>
-                    <option value="National Capital Region (NCR)">National Capital Region (NCR)</option>
-                    <option value="Cordillera Administrative Region (CAR)">Cordillera Administrative Region (CAR)</option>
-                    <option value="Ilocos Region (Region I)">Ilocos Region (Region I)</option>
-                    <option value="Cagayan Valley (Region II)">Cagayan Valley (Region II)</option>
-                    <option value="Central Luzon (Region III)">Central Luzon (Region III)</option>
-                    <option value="CALABARZON (Region IV-A)">CALABARZON (Region IV-A)</option>
-                    <option value="MIMAROPA (Region IV-B)">MIMAROPA (Region IV-B)</option>
-                    <option value="Bicol Region (Region V)">Bicol Region (Region V)</option>
-                    <option value="Western Visayas (Region VI)">Western Visayas (Region VI)</option>
-                    <option value="Central Visayas (Region VII)">Central Visayas (Region VII)</option>
-                    <option value="Eastern Visayas (Region VIII)">Eastern Visayas (Region VIII)</option>
-                    <option value="Zamboanga Peninsula (Region IX)">Zamboanga Peninsula (Region IX)</option>
-                    <option value="Northern Mindanao (Region X)">Northern Mindanao (Region X)</option>
-                    <option value="Davao Region (Region XI)">Davao Region (Region XI)</option>
-                    <option value="SOCCSKSARGEN (Region XII)">SOCCSKSARGEN (Region XII)</option>
-                    <option value="Caraga (Region XIII)">Caraga (Region XIII)</option>
-                    <option value="Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)">
-                      Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)
-                    </option>
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="city_village">City/Village</Label>
-                  <Input
-                    id="city_village"
-                    value={newPatient.city_village}
-                    onChange={(e) => setNewPatient((prev) => ({ ...prev, city_village: e.target.value }))}
-                  />
-                </div>
-              </div>
-
-              {/* Employment Status Section */}
-              <div className="space-y-4 pt-2">
-                <h3 className="text-lg font-medium">Employment & Education</h3>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="employment_status">Employment Status</Label>
-                    <Select
-                      value={newPatient.employment_status}
-                      onValueChange={(value) => setNewPatient((prev) => ({ ...prev, employment_status: value }))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select employment status" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Employed">Employed</SelectItem>
-                        <SelectItem value="Self Employed">Self Employed</SelectItem>
-                        <SelectItem value="Not Employed">Not Employed</SelectItem>
-                        <SelectItem value="Student">Student</SelectItem>
-                        <SelectItem value="Retired">Retired</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="highest_education_level">Highest Education Level</Label>
-                    <Select
-                      value={newPatient.highest_education_level}
-                      onValueChange={(value) => setNewPatient((prev) => ({ ...prev, highest_education_level: value }))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select education level" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="None">None</SelectItem>
-                        <SelectItem value="Primary">Primary</SelectItem>
-                        <SelectItem value="Secondary">Secondary</SelectItem>
-                        <SelectItem value="Post Secondary">Post Secondary</SelectItem>
-                        <SelectItem value="University">University</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* Student Information Section */}
-                <div className="border rounded-lg p-4 space-y-4">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="is_student"
-                      checked={newPatient.is_student}
-                      onCheckedChange={(checked) => setNewPatient((prev) => ({ ...prev, is_student: !!checked }))}
-                    />
-                    <Label htmlFor="is_student" className="text-base font-medium">Current Student</Label>
-                  </div>
-
-                  {newPatient.is_student && (
-                    <div className="grid grid-cols-2 gap-4 pt-2">
-                      <div className="space-y-2">
-                        <Label htmlFor="school_name">School Name *</Label>
-                        <Input
-                          id="school_name"
-                          value={newPatient.school_name}
-                          onChange={(e) => setNewPatient((prev) => ({ ...prev, school_name: e.target.value }))}
-                          required={newPatient.is_student}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="school_phone_number">School Phone Number</Label>
-                        <Input
-                          id="school_phone_number"
-                          value={newPatient.school_phone_number}
-                          onChange={(e) => setNewPatient((prev) => ({ ...prev, school_phone_number: e.target.value }))}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {error && <div className="text-red-500">{error}</div>}
-
-              <div className="flex justify-end space-x-2 pt-4">
-                <Button type="button" variant="outline" onClick={handleAttemptClose}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={loading}>
-                  {loading ? "Registering..." : "Register Patient"}
-                </Button>
-              </div>
-            </form>
-          </DialogContent>
-        </Dialog>
       </div>
 
       {/* Search and Filters */}
@@ -494,47 +283,283 @@ export default function PatientsPage() {
                 />
               </div>
             </div>
-            <Select value={filterGender} onValueChange={setFilterGender}>
-              <SelectTrigger className="w-full md:w-[180px]">
-                <SelectValue placeholder="All Genders" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="All Genders">All Genders</SelectItem>
-                <SelectItem value="Male">Male</SelectItem>
-                <SelectItem value="Female">Female</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={filterEmployment} onValueChange={setFilterEmployment}>
-              <SelectTrigger className="w-full md:w-[180px]">
-                <SelectValue placeholder="All Employment" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="All Employment">All Employment</SelectItem>
-                <SelectItem value="Employed">Employed</SelectItem>
-                <SelectItem value="Self Employed">Self Employed</SelectItem>
-                <SelectItem value="Not Employed">Not Employed</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={filterStudent} onValueChange={setFilterStudent}>
-              <SelectTrigger className="w-full md:w-[180px]">
-                <SelectValue placeholder="Student Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="All Students">All Students</SelectItem>
-                <SelectItem value="Student">Student</SelectItem>
-                <SelectItem value="Non-Student">Non-Student</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex space-x-2 w-full md:w-auto">
+              <Select value={filterGender} onValueChange={setFilterGender}>
+                <SelectTrigger className="w-full md:w-[180px]">
+                  <SelectValue placeholder="All Genders" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="All Genders">All Genders</SelectItem>
+                  <SelectItem value="Male">Male</SelectItem>
+                  <SelectItem value="Female">Female</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <div className="flex items-center space-x-2">
+                <Input
+                  type="date"
+                  value={filterStartDate}
+                  onChange={(e) => setFilterStartDate(e.target.value)}
+                  className="w-36"
+                  aria-label="Start date"
+                />
+                <span className="text-sm text-muted-foreground">—</span>
+                <Input
+                  type="date"
+                  value={filterEndDate}
+                  onChange={(e) => setFilterEndDate(e.target.value)}
+                  className="w-36"
+                  aria-label="End date"
+                />
+              </div>
+            </div>
+            {/* employment & student filters removed — using Date Added column in table instead */}
           </div>
         </CardContent>
       </Card>
 
       {/* Patient List */}
       <Card>
-        <CardHeader>
-          <CardTitle>Patient Records ({filteredPatients.length})</CardTitle>
-          <CardDescription>Manage patient information and medical records</CardDescription>
+        <CardHeader className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+
+            <CardTitle>Patient Records ({filteredPatients.length})</CardTitle>
+            <CardDescription>Manage patient information and medical records</CardDescription>
+          </div>
+          <div>
+            <Dialog open={showAddPatient} onOpenChange={handleDialogOpenChange}>
+              <DialogTrigger asChild>
+                <Button>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add New Patient
+                </Button>
+              </DialogTrigger>
+              <DialogContent size="3xl" className="max-h-[85vh] overflow-y-auto">
+                <DialogHeader className="px-6 pt-6 pb-4 border-b">
+                  <DialogTitle className="text-2xl">Register New Patient</DialogTitle>
+                  <DialogDescription className="text-sm">
+                    Enter patient demographic information
+                  </DialogDescription>
+                </DialogHeader>
+                <form onSubmit={handleAddPatient} className="space-y-4 p-6">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="last_name">Last Name *</Label>
+                      <Input
+                        id="last_name"
+                        value={newPatient.last_name}
+                        onChange={(e) => setNewPatient((prev) => ({ ...prev, last_name: e.target.value }))}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="first_name">First Name *</Label>
+                      <Input
+                        id="first_name"
+                        value={newPatient.first_name}
+                        onChange={(e) => setNewPatient((prev) => ({ ...prev, first_name: e.target.value }))}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="gender">Gender *</Label>
+                      <Select
+                        value={newPatient.gender}
+                        onValueChange={(value) => setNewPatient((prev) => ({ ...prev, gender: value }))}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select gender" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Male">Male</SelectItem>
+                          <SelectItem value="Female">Female</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="date_of_birth">Date of Birth *</Label>
+                      <Input
+                        id="date_of_birth"
+                        type="date"
+                        value={newPatient.date_of_birth}
+                        onChange={(e) => setNewPatient((prev) => ({ ...prev, date_of_birth: e.target.value }))}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="age">Age</Label>
+                      <Input
+                        id="age"
+                        type="number"
+                        value={newPatient.age}
+                        onChange={(e) => setNewPatient((prev) => ({ ...prev, age: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="mobile_number">Mobile Number</Label>
+                      <Input
+                        id="mobile_number"
+                        value={newPatient.mobile_number}
+                        onChange={(e) => setNewPatient((prev) => ({ ...prev, mobile_number: e.target.value }))}
+                        placeholder="+63912345678"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="alternative_number">Alternative Number</Label>
+                      <Input
+                        id="alternative_number"
+                        value={newPatient.alternative_number}
+                        onChange={(e) => setNewPatient((prev) => ({ ...prev, alternative_number: e.target.value }))}
+                        placeholder="+63923456789"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="region_district">Region/District</Label>
+                      <select
+                        id="region_district"
+                        value={newPatient.region_district}
+                        onChange={(e) =>
+                          setNewPatient((prev) => ({ ...prev, region_district: e.target.value }))
+                        }
+                        className="w-full p-2 border rounded-md"
+                      >
+                        <option value="">Select Region</option>
+                        <option value="National Capital Region (NCR)">National Capital Region (NCR)</option>
+                        <option value="Cordillera Administrative Region (CAR)">Cordillera Administrative Region (CAR)</option>
+                        <option value="Ilocos Region (Region I)">Ilocos Region (Region I)</option>
+                        <option value="Cagayan Valley (Region II)">Cagayan Valley (Region II)</option>
+                        <option value="Central Luzon (Region III)">Central Luzon (Region III)</option>
+                        <option value="CALABARZON (Region IV-A)">CALABARZON (Region IV-A)</option>
+                        <option value="MIMAROPA (Region IV-B)">MIMAROPA (Region IV-B)</option>
+                        <option value="Bicol Region (Region V)">Bicol Region (Region V)</option>
+                        <option value="Western Visayas (Region VI)">Western Visayas (Region VI)</option>
+                        <option value="Central Visayas (Region VII)">Central Visayas (Region VII)</option>
+                        <option value="Eastern Visayas (Region VIII)">Eastern Visayas (Region VIII)</option>
+                        <option value="Zamboanga Peninsula (Region IX)">Zamboanga Peninsula (Region IX)</option>
+                        <option value="Northern Mindanao (Region X)">Northern Mindanao (Region X)</option>
+                        <option value="Davao Region (Region XI)">Davao Region (Region XI)</option>
+                        <option value="SOCCSKSARGEN (Region XII)">SOCCSKSARGEN (Region XII)</option>
+                        <option value="Caraga (Region XIII)">Caraga (Region XIII)</option>
+                        <option value="Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)">
+                          Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)
+                        </option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="city_village">City/Village</Label>
+                      <Input
+                        id="city_village"
+                        value={newPatient.city_village}
+                        onChange={(e) => setNewPatient((prev) => ({ ...prev, city_village: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Employment Status Section */}
+                  <div className="space-y-4 pt-2">
+                    <h3 className="text-lg font-medium">Employment & Education</h3>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="employment_status">Employment Status</Label>
+                        <Select
+                          value={newPatient.employment_status}
+                          onValueChange={(value) => setNewPatient((prev) => ({ ...prev, employment_status: value }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select employment status" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Employed">Employed</SelectItem>
+                            <SelectItem value="Self Employed">Self Employed</SelectItem>
+                            <SelectItem value="Not Employed">Not Employed</SelectItem>
+                            <SelectItem value="Student">Student</SelectItem>
+                            <SelectItem value="Retired">Retired</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="highest_education_level">Highest Education Level</Label>
+                        <Select
+                          value={newPatient.highest_education_level}
+                          onValueChange={(value) => setNewPatient((prev) => ({ ...prev, highest_education_level: value }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select education level" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="None">None</SelectItem>
+                            <SelectItem value="Primary">Primary</SelectItem>
+                            <SelectItem value="Secondary">Secondary</SelectItem>
+                            <SelectItem value="Post Secondary">Post Secondary</SelectItem>
+                            <SelectItem value="University">University</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    {/* Student Information Section */}
+                    <div className="border rounded-lg p-4 space-y-4">
+                      <div className="flex items-center space-x-2">
+                        <Checkbox
+                          id="is_student"
+                          checked={newPatient.is_student}
+                          onCheckedChange={(checked) => setNewPatient((prev) => ({ ...prev, is_student: !!checked }))}
+                        />
+                        <Label htmlFor="is_student" className="text-base font-medium">Current Student</Label>
+                      </div>
+
+                      {newPatient.is_student && (
+                        <div className="grid grid-cols-2 gap-4 pt-2">
+                          <div className="space-y-2">
+                            <Label htmlFor="school_name">School Name *</Label>
+                            <Input
+                              id="school_name"
+                              value={newPatient.school_name}
+                              onChange={(e) => setNewPatient((prev) => ({ ...prev, school_name: e.target.value }))}
+                              required={newPatient.is_student}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="school_phone_number">School Phone Number</Label>
+                            <Input
+                              id="school_phone_number"
+                              value={newPatient.school_phone_number}
+                              onChange={(e) => setNewPatient((prev) => ({ ...prev, school_phone_number: e.target.value }))}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {error && <div className="text-red-500">{error}</div>}
+
+                  <div className="flex justify-end space-x-2 pt-4">
+                    <Button type="button" variant="outline" onClick={handleAttemptClose}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={loading}>
+                      {loading ? "Registering..." : "Register Patient"}
+                    </Button>
+                  </div>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
+
         </CardHeader>
+
         <CardContent>
           {loading ? (
             <div>Loading...</div>
@@ -547,9 +572,8 @@ export default function PatientsPage() {
                   <TableHead>Gender</TableHead>
                   <TableHead>Age</TableHead>
                   <TableHead>Location</TableHead>
-                  <TableHead>Employment</TableHead>
-                  <TableHead>Student</TableHead>
                   <TableHead>Contact</TableHead>
+                  <TableHead>Date Added</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -584,20 +608,6 @@ export default function PatientsPage() {
                           <div className="text-muted-foreground">{patient.region_district}</div>
                         </div>
                       </TableCell>
-                      {/* Employment */}
-                      <TableCell>
-                        <Badge variant="outline">{patient.employment_status}</Badge>
-                      </TableCell>
-                      {/* Student Status */}
-                      <TableCell>
-                        {isStudent ? (
-                          <Badge variant="default" className="bg-green-100 text-green-800 hover:bg-green-200">
-                            Student
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline">Non-Student</Badge>
-                        )}
-                      </TableCell>
                       {/* Contact */}
                       <TableCell>
                         <div>{patient.mobile_number}</div>
@@ -605,6 +615,8 @@ export default function PatientsPage() {
                           <div className="text-muted-foreground">{patient.alternative_number}</div>
                         )}
                       </TableCell>
+                      {/* Date Added */}
+                      <TableCell>{formatDate(patient.date_added || patient.created_at || patient.createdAt)}</TableCell>
                       {/* Actions */}
                       <TableCell>
                         <div className="flex space-x-2">

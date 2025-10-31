@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Philippine Geocoding Tool (Nominatim)</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+    textarea, input[type="file"] {
+      width: 100%;
+      padding: 10px;
+      border: 2px solid #ddd;
+      border-radius: 5px;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    button {
+      background-color: #007cba;
+      color: white;
+      padding: 12px 20px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      margin: 5px;
+    }
+    button:hover { background-color: #005a87; }
+    button:disabled { background-color: #ccc; cursor: not-allowed; }
+    .loading {
+      display: none;
+      text-align: center;
+      color: #007cba;
+      margin: 10px 0;
+    }
+    .result {
+      background: #f8f9fa;
+      padding: 10px;
+      border-radius: 5px;
+      margin-top: 15px;
+      font-family: monospace;
+      white-space: pre-wrap;
+    }
+    .controls { text-align: center; margin-top: 15px; }
+    .download-links a {
+      display: inline-block;
+      background-color: #28a745;
+      color: white;
+      text-decoration: none;
+      padding: 10px 20px;
+      border-radius: 5px;
+      margin-right: 10px;
+    }
+    .download-links a:hover { background-color: #1e7e34; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🌍 Philippine Geocoding Tool</h1>
+    <p style="text-align:center;">Automatically fill missing latitude and longitude using OpenStreetMap (Nominatim)</p>
+
+    <h3>1️⃣ Upload JSON File</h3>
+    <input type="file" id="fileInput" accept=".json" />
+    <div class="controls">
+      <button onclick="loadFile()">Load JSON</button>
+    </div>
+
+    <h3>2️⃣ Preview or Edit Data</h3>
+    <textarea id="jsonInput" placeholder='Paste JSON data here or upload a file'></textarea>
+
+    <div class="controls">
+      <button id="bulkBtn" onclick="geocodeBulk()">🌐 Start Geocoding</button>
+      <button onclick="clearOutput()" style="background-color:#6c757d;">Clear</button>
+    </div>
+
+    <div id="loading" class="loading">⏳ Geocoding in progress... Please wait.</div>
+
+    <div id="result" class="result"></div>
+
+    <div class="download-links" id="downloadLinks" style="display:none; text-align:center; margin-top:15px;"></div>
+  </div>
+
+  <script>
+    // Load uploaded JSON file
+    function loadFile() {
+      const fileInput = document.getElementById("fileInput");
+      if (!fileInput.files.length) {
+        alert("Please select a JSON file first.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        document.getElementById("jsonInput").value = e.target.result;
+      };
+      reader.readAsText(fileInput.files[0]);
+    }
+
+    // Clear output and textarea
+    function clearOutput() {
+      document.getElementById("jsonInput").value = "";
+      document.getElementById("result").textContent = "";
+      document.getElementById("downloadLinks").style.display = "none";
+    }
+
+    // Build query for Nominatim
+    function buildQuery(region, province, city) {
+      let query = "";
+      if (city) query += city + ", ";
+      if (province) query += province + ", ";
+      if (region) query += region + ", ";
+      query += "Philippines";
+      return query;
+    }
+
+    // Geocode using Nominatim
+    async function geocodeAddress(query) {
+      const encoded = encodeURIComponent(query);
+      const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1&addressdetails=1`;
+
+      const response = await fetch(url, {
+        headers: { "User-Agent": "GeocodingTool/1.0 (example@domain.com)" }
+      });
+
+      const data = await response.json();
+      if (data && data.length > 0) {
+        return { success: true, data: { lat: data[0].lat, lng: data[0].lon } };
+      } else {
+        return { success: false, error: "No results found" };
+      }
+    }
+
+    // Main bulk geocode
+    async function geocodeBulk() {
+      const jsonInput = document.getElementById("jsonInput").value.trim();
+      if (!jsonInput) {
+        alert("Please paste or load JSON data first.");
+        return;
+      }
+
+      let data;
+      try {
+        data = JSON.parse(jsonInput);
+      } catch (e) {
+        alert("Invalid JSON format");
+        return;
+      }
+
+      if (!Array.isArray(data)) {
+        alert("Please provide a JSON array");
+        return;
+      }
+
+      const bulkBtn = document.getElementById("bulkBtn");
+      const loading = document.getElementById("loading");
+      const resultDiv = document.getElementById("result");
+      const downloadLinks = document.getElementById("downloadLinks");
+
+      bulkBtn.disabled = true;
+      loading.style.display = "block";
+      resultDiv.textContent = "";
+      downloadLinks.style.display = "none";
+
+      try {
+        const results = [];
+
+        for (let i = 0; i < data.length; i++) {
+          const item = data[i];
+
+          // Skip if lat/lng already exist
+          if (item.lat !== null && item.lng !== null) {
+            item.geocode_status = "skipped (already has coordinates)";
+            results.push(item);
+            console.log(`⏩ Skipped: ${item.city}, ${item.province}`);
+            continue;
+          }
+
+          const query = buildQuery(item.region, item.province, item.city);
+          loading.textContent = `⏳ Geocoding ${i + 1} of ${data.length}: ${item.city}, ${item.province}...`;
+
+          const result = await geocodeAddress(query);
+
+          if (result.success) {
+            item.lat = parseFloat(result.data.lat);
+            item.lng = parseFloat(result.data.lng);
+            item.geocode_status = "success";
+          } else {
+            item.geocode_status = `failed: ${result.error}`;
+          }
+
+          results.push(item);
+
+          // Respect Nominatim rate limit (1 req/sec)
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        // Stats
+        const success = results.filter(r => r.geocode_status === "success").length;
+        const failed = results.filter(r => r.geocode_status.startsWith("failed")).length;
+        const skipped = results.filter(r => r.geocode_status.includes("skipped")).length;
+
+        resultDiv.textContent = `✅ Done!\nSuccess: ${success}\nFailed: ${failed}\nSkipped: ${skipped}\n\nPreview:\n` + JSON.stringify(results.slice(0,5), null, 2);
+
+        // Create download links
+        const jsonStr = JSON.stringify(results, null, 2);
+        const jsonBlob = new Blob([jsonStr], { type: "application/json" });
+        const jsonUrl = URL.createObjectURL(jsonBlob);
+
+        const csv = convertToCSV(results);
+        const csvBlob = new Blob([csv], { type: "text/csv" });
+        const csvUrl = URL.createObjectURL(csvBlob);
+
+        downloadLinks.innerHTML = `
+          <a href="${jsonUrl}" download="geocoded_results.json">📥 Download JSON</a>
+          <a href="${csvUrl}" download="geocoded_results.csv">📊 Download CSV</a>
+        `;
+        downloadLinks.style.display = "block";
+      } catch (err) {
+        resultDiv.textContent = "❌ Error: " + err.message;
+      } finally {
+        bulkBtn.disabled = false;
+        loading.style.display = "none";
+      }
+    }
+
+    // Convert JSON to CSV
+    function convertToCSV(arr) {
+      if (!arr.length) return "";
+      const keys = Object.keys(arr[0]);
+      const rows = arr.map(obj =>
+        keys.map(k => `"${(obj[k] !== null && obj[k] !== undefined) ? obj[k] : ""}"`).join(",")
+      );
+      return keys.join(",") + "\n" + rows.join("\n");
+    }
+  </script>
+</body>
+</html>

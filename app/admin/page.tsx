@@ -835,7 +835,6 @@ export default function AdminPage() {
                     <TableHead>Date</TableHead>
                     <TableHead>Actor</TableHead>
                     <TableHead>Action</TableHead>
-                    <TableHead>Table</TableHead>
                     <TableHead>View</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -858,7 +857,6 @@ export default function AdminPage() {
                         <TableCell className="w-[180px] text-xs">{whenFormatted}</TableCell>
                         <TableCell className="text-sm">{log.author || log.username || `${log.first_name || ""} ${log.last_name || ""}`.trim()}</TableCell>
                         <TableCell className="text-sm">{log.action_type || log.action || log.type}</TableCell>
-                        <TableCell className="text-sm">{log.table_name}</TableCell>
                         <TableCell className="text-center">
                           <Button className="flex items-center" size="sm" variant="ghost" onClick={() => { setSelectedAuditLog(log); setAuditModalOpen(true); }}>
                             <Eye className="h-4 w-8" />

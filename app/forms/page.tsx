@@ -16,7 +16,8 @@ export default function FormsPage() {
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
-      <div>
+      <div className="flex items-center space-x-3">
+        <FileText className="h-6 w-6 text-primary" />
         <h1 className="text-3xl font-bold tracking-tight">Phase Forms</h1>
       </div>
 
