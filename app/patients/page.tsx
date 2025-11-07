@@ -22,6 +22,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { decryptObject } from "@/utils/decrypt"
 import { Search, Plus, Edit, Eye, User } from "lucide-react"
 import { Users } from "lucide-react"
+import { useRouter } from "next/navigation"
 
 // API instance (adjust baseURL as needed)
 const api = axios.create({
@@ -56,13 +57,13 @@ export default function PatientsPage() {
   const [filterEndDate, setFilterEndDate] = useState<string>("")
   // removed employment/student filters; replaced table columns with Date Added
   const [showAddPatient, setShowAddPatient] = useState(false)
-  const [selectedPatient, setSelectedPatient] = useState<any>(null)
   const [newPatient, setNewPatient] = useState(INITIAL_PATIENT_STATE)
   const initialRef = useRef(INITIAL_PATIENT_STATE)
   const [confirmCloseOpen, setConfirmCloseOpen] = useState(false)
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const router = useRouter()
 
   const formatDate = (value: any) => {
     if (!value) return "—"
@@ -620,7 +621,11 @@ export default function PatientsPage() {
                       {/* Actions */}
                       <TableCell>
                         <div className="flex space-x-2">
-                          <Button variant="ghost" size="sm" onClick={() => setSelectedPatient(patient)}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => router.push(`/patients/${patient.patient_id}`)}
+                          >
                             <Eye className="h-4 w-4" />
                           </Button>
                           <Button variant="ghost" size="sm">
@@ -636,87 +641,6 @@ export default function PatientsPage() {
           )}
         </CardContent>
       </Card>
-
-      {/* Patient Details Dialog */}
-      {selectedPatient && (
-        <Dialog open={!!selectedPatient} onOpenChange={() => setSelectedPatient(null)}>
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>
-                Patient Details: {selectedPatient.last_name}, {selectedPatient.first_name}
-              </DialogTitle>
-              <DialogDescription>{selectedPatient.shf_id || "SHF ID not assigned"}</DialogDescription>
-            </DialogHeader>
-            <Tabs defaultValue="demographics" className="w-full">
-              <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="demographics">Demographics</TabsTrigger>
-                <TabsTrigger value="medical">Medical History</TabsTrigger>
-                <TabsTrigger value="visits">Visit History</TabsTrigger>
-              </TabsList>
-              <TabsContent value="demographics" className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-sm font-medium">Full Name</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {selectedPatient.last_name}, {selectedPatient.first_name}
-                    </p>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Gender</Label>
-                    <p className="text-sm text-muted-foreground">{selectedPatient.gender}</p>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Age</Label>
-                    <p className="text-sm text-muted-foreground">{selectedPatient.age} years old</p>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Employment Status</Label>
-                    <p className="text-sm text-muted-foreground">{selectedPatient.employment_status}</p>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Student Status</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {selectedPatient.school_name ? "Current Student" : "Not a Student"}
-                    </p>
-                    {selectedPatient.school_name && (
-                      <div className="mt-1">
-                        <p className="text-sm font-medium">School: {selectedPatient.school_name}</p>
-                        {selectedPatient.school_phone_number && (
-                          <p className="text-sm text-muted-foreground">School Phone: {selectedPatient.school_phone_number}</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Highest Education</Label>
-                    <p className="text-sm text-muted-foreground">{selectedPatient.highest_education_level}</p>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Mobile Number</Label>
-                    <p className="text-sm text-muted-foreground">{selectedPatient.mobile_number}</p>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Location</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {selectedPatient.city_village}, {selectedPatient.region_district}
-                    </p>
-                  </div>
-                </div>
-              </TabsContent>
-              <TabsContent value="medical" className="space-y-4">
-                <p className="text-sm text-muted-foreground">
-                  Medical history will be displayed here once forms are completed.
-                </p>
-              </TabsContent>
-              <TabsContent value="visits" className="space-y-4">
-                <p className="text-sm text-muted-foreground">
-                  Visit history and treatment records will be displayed here.
-                </p>
-              </TabsContent>
-            </Tabs>
-          </DialogContent>
-        </Dialog>
-      )}
 
       {/* Close Confirmation Dialog */}
       <Dialog open={confirmCloseOpen} onOpenChange={(v) => setConfirmCloseOpen(v)}>

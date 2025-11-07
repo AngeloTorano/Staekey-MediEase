@@ -19,7 +19,8 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
-  Bell, // added
+  Bell,
+  LayoutDashboard, // added
 } from "lucide-react"
 import { decryptObject } from "@/utils/decrypt" // decrypt helper
 
@@ -33,7 +34,7 @@ export const NAV_ITEMS = [
   {
     title: "Dashboard",
     href: "/dashboard",
-    icon: Heart,
+    icon: LayoutDashboard,
     roles: [
       "Admin",
       "Country Coordinator",

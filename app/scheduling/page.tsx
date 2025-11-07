@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, Edit, Trash } from "lucide-react"
 import { RoleGuard } from "@/components/role-guard"
@@ -30,8 +30,8 @@ type Mission = {
   id: number
   title: string
   type: string
-  date: string        // normalized YYYY-MM-DD
-  time?: string       // normalized HH:mm
+  date: string // normalized YYYY-MM-DD
+  time?: string // normalized HH:mm
   city?: string
   location?: string
   coordinator?: string
@@ -42,6 +42,9 @@ type Mission = {
 
 // helper: pad
 const pad = (n: number) => String(n).padStart(2, "0")
+
+// NEW: Month labels for the month filter
+const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
 
 // normalize incoming date/time strings into { date: 'YYYY-MM-DD', time: 'HH:mm'? }
 const normalizeDateTime = (input?: string | null) => {
@@ -70,14 +73,17 @@ const normalizeDateTime = (input?: string | null) => {
 }
 
 // format a mission's date/time for display (e.g., "Oct 19, 2025 • 2:00 PM" or "Oct 19, 2025")
-const formatMissionDate = (m: Mission) => {
-  if (!m.date) return ""
+const formatMissionDate = (m?: Mission | null) => {
+  if (!m || !m.date) return ""
   try {
     if (m.time) {
       const dt = new Date(`${m.date}T${m.time}`)
       return `${dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} • ${dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
     } else {
-      const d = new Date(m.date)
+      // FIX: Handle YYYY-MM-DD which might be parsed as UTC by new Date()
+      // Split and construct date to avoid timezone issues
+      const parts = m.date.split('-').map(Number);
+      const d = new Date(parts[0], parts[1] - 1, parts[2]);
       return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
     }
   } catch {
@@ -89,36 +95,90 @@ const toDateKey = (y: number, m: number, d: number) => `${y}-${String(m + 1).pad
 const daysInMonth = (y: number, m: number) => new Date(y, m + 1, 0).getDate()
 const firstDayIndex = (y: number, m: number) => new Date(y, m, 1).getDay()
 
+// Define keys for validation, excluding 'id' or other non-form fields
+type MissionFormKeys = keyof Omit<Mission, 'id' | 'type' | 'location' | 'coordinator' | 'participants'>;
+
+// NEW: Default state for the new mission form
+const defaultNewMissionState = (date: string) => ({
+  title: "",
+  type: "Phase 1",
+  date: date,
+  time: "08:00",
+  city: "",
+  status: "Upcoming",
+  location: "",
+  coordinator: "",
+  description: "",
+})
+
 export default function SchedulingPage() {
   const [missions, setMissions] = useState<Mission[]>([])
-  const [selectedCity, setSelectedCity] = useState<string>("all")
-  const [selectedType, setSelectedType] = useState<string>("all")
+  // REMOVE: selectedCity/selectedType in favor of a single month filter
+  // const [selectedCity, setSelectedCity] = useState<string>("all")
+  // const [selectedType, setSelectedType] = useState<string>("all")
 
-  const today = new Date()
-  const [viewYear, setViewYear] = useState(today.getFullYear())
-  const [viewMonth, setViewMonth] = useState(today.getMonth())
+  // NEW: single month filter (0-11). default to current month instead of 'all'
+  const [monthFilter, setMonthFilter] = useState<number | 'current'>('current')
+  // NEW: status filter ('all' still allowed for cards/calendar)
+  const [statusFilter, setStatusFilter] = useState<'all' | 'upcoming' | 'postponed' | 'completed'>('all')
+
+  // --- HYDRATION FIX: Start ---
+  const [isClient, setIsClient] = useState(false)
+  // Initialize with stable server-side defaults
+  const [todayKey, setTodayKey] = useState("")
+  const [viewYear, setViewYear] = useState(new Date().getFullYear())
+  const [viewMonth, setViewMonth] = useState(new Date().getMonth())
+  // --- HYDRATION FIX: End ---
+
   const [isNewMissionOpen, setIsNewMissionOpen] = useState(false)
   const [isNotifyOpen, setIsNotifyOpen] = useState(false)
-  const [selectedMessageType, setSelectedMessageType] = useState<string>("Ongoing")
+  const [selectedMessageType, setSelectedMessageType] = useState<string>("Upcoming") // Default to 'Upcoming'
 
   // New: editing state for create/update
-  const [newMission, setNewMission] = useState<Partial<Mission>>({
-    title: "",
-    type: "Phase 1",
-    date: toDateKey(today.getFullYear(), today.getMonth(), today.getDate()),
-    time: "09:00",
-    city: "",
-    status: "",
-    location: "",
-    coordinator: "",
-    description: "",
-  })
+  const [newMission, setNewMission] = useState<Partial<Mission>>(defaultNewMissionState(""))
   const [editingMission, setEditingMission] = useState<Partial<Mission> | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // NEW: State for form validation errors
+  const [validationErrors, setValidationErrors] = useState<Partial<Record<MissionFormKeys, string>>>({});
+
   // delete confirmation target (use modal instead of alert)
   const [deleteTarget, setDeleteTarget] = useState<Mission | null>(null)
+
+  // NEW: States for Notification Flow
+  const [isNotifyMode, setIsNotifyMode] = useState(false)
+  const [notifyTarget, setNotifyTarget] = useState<Mission | null>(null)
+  const [isNotifying, setIsNotifying] = useState(false)
+  const [notifyError, setNotifyError] = useState<string | null>(null)
+
+  // NEW: Success dialog state (replaces alert)
+  const [isNotifySuccessOpen, setIsNotifySuccessOpen] = useState(false)
+  const [notifySuccessMessage, setNotifySuccessMessage] = useState<string | null>(null)
+
+  // NEW: Sent messages dialog state
+  type SentMessage = {
+    sms_id?: number
+    message_type: string
+    message_content: string
+    recipient_count: number
+    recipients?: string
+    created_at?: string
+  }
+  const [isSentMessagesOpen, setIsSentMessagesOpen] = useState(false)
+  const [sentMessages, setSentMessages] = useState<SentMessage[]>([])
+  const [sentLoading, setSentLoading] = useState(false)
+  const [sentError, setSentError] = useState<string | null>(null)
+  // --- HYDRATION FIX: Set client-specific dates in useEffect ---
+  useEffect(() => {
+    const today = new Date()
+    const key = toDateKey(today.getFullYear(), today.getMonth(), today.getDate())
+    setTodayKey(key)
+    setViewYear(today.getFullYear())
+    setViewMonth(today.getMonth())
+    setNewMission(defaultNewMissionState(key)) // Set default form state with today's key
+    setIsClient(true)
+  }, []) // Empty dependency array ensures this runs once on mount
 
   // Fetch schedules from backend (handles encrypted responses)
   useEffect(() => {
@@ -161,7 +221,11 @@ export default function SchedulingPage() {
             type: s.type || (s.mission_name && s.mission_name.split(" - ")[0]) || "Phase",
             date: date,
             time: time || (s.time ? normalizeDateTime(s.time).time : undefined),
-            city: s.AfterCareCity || s.city,
+
+            // --- FIX 1: Read lowercase 'aftercarecity' from DB ---
+            city: s.AfterCareCity || s.aftercarecity,
+            // --- END FIX 1 ---
+
             location: s.location,
             coordinator: s.coordinator,
             status: s.status || "Pending",
@@ -222,12 +286,18 @@ export default function SchedulingPage() {
   }
 
   const filteredMissions = useMemo(() => {
-    return missions.filter((m) => {
-      const cityOk = selectedCity === "all" || m.city === selectedCity
-      const typeOk = selectedType === "all" || m.type === selectedType
-      return cityOk && typeOk
+    const currentMonthIdx = new Date().getMonth()
+    const activeMonth = monthFilter === 'current' ? currentMonthIdx : monthFilter
+    return missions.filter(m => {
+      if (!m.date) return false
+      const parts = m.date.split("-").map(Number)
+      if (parts.length < 3) return false
+      const mo = parts[1] - 1
+      if (mo !== activeMonth) return false
+      if (statusFilter !== 'all' && statusToGroup(m.status) !== statusFilter) return false
+      return true
     })
-  }, [missions, selectedCity, selectedType])
+  }, [missions, monthFilter, statusFilter])
 
   const monthGrid = useMemo(() => {
     const weeks: { day: number; monthOffset: -1 | 0 | 1; key: string }[] = []
@@ -262,14 +332,54 @@ export default function SchedulingPage() {
   }, [filteredMissions])
 
   // Kanban groups
-  const upcoming = useMemo(() => missions.filter(m => ["upcoming"].includes(statusToGroup(m.status))), [missions])
-  const postponed = useMemo(() => missions.filter(m => statusToGroup(m.status) === "postponed"), [missions])
-  const completed = useMemo(() => missions.filter(m => statusToGroup(m.status) === "completed"), [missions])
+  // Only include schedules that fall within the selected month (ALL shows all)
+  const isInSelectedMonth = (m?: Mission) => {
+    if (!m?.date) return false
+    const currentMonthIdx = new Date().getMonth()
+    const activeMonth = monthFilter === 'current' ? currentMonthIdx : monthFilter
+    const parts = m.date.split("-").map(Number)
+    if (parts.length < 3) return false
+    if (parts[1] - 1 !== activeMonth) return false
+    if (statusFilter !== 'all' && statusToGroup(m.status) !== statusFilter) return false
+    return true
+  }
+
+  const upcoming = useMemo(() => filteredMissions.filter(m => statusToGroup(m.status) === "upcoming"), [filteredMissions])
+  const postponed = useMemo(() => filteredMissions.filter(m => statusToGroup(m.status) === "postponed"), [filteredMissions])
+  const completed = useMemo(() => filteredMissions.filter(m => statusToGroup(m.status) === "completed"), [filteredMissions])
+
+  // NEW: Validation function
+  const validateMission = (mission: Partial<Mission>) => {
+    const errors: Partial<Record<MissionFormKeys, string>> = {};
+
+    if (!mission.title?.trim()) {
+      errors.title = "Mission Name is required";
+    }
+    if (!mission.description?.trim()) {
+      errors.description = "Description is required";
+    }
+    // --- START CORRECTION ---
+    if (!mission.city?.trim()) {
+      errors.city = "AfterCare City is required";
+    }
+    // --- END CORRECTION ---
+    if (!mission.date) {
+      errors.date = "Date is required";
+    }
+    if (!mission.time) {
+      errors.time = "Time is required";
+    }
+    if (!mission.status) {
+      errors.status = "Status must be selected";
+    }
+
+    return errors;
+  };
 
   // Create schedule (POST -> backend)
   const submitNewMission = async () => {
     setLoading(true)
-    setError(null)
+    setError(null) // Clear previous API errors
     try {
       const token = typeof window !== "undefined" ? sessionStorage.getItem("token") || localStorage.getItem("token") : null
       const payload = {
@@ -298,7 +408,11 @@ export default function SchedulingPage() {
         type: created.type || (created.mission_name && created.mission_name.split(" - ")[0]) || (newMission.type || "Phase"),
         date: dt.date,
         time: dt.time || (created.time ? normalizeDateTime(created.time).time : (newMission.time || undefined)),
-        city: created.AfterCareCity || created.city || newMission.city,
+
+        // --- FIX 2: Read 'aftercarecity' and fallback to 'city' or form state ---
+        city: created.AfterCareCity || created.aftercarecity || created.city || newMission.city,
+        // --- END FIX 2 ---
+
         location: created.location,
         coordinator: created.coordinator,
         status: created.status || newMission.status || "Pending",
@@ -308,16 +422,7 @@ export default function SchedulingPage() {
 
       setMissions((prev) => [mapped, ...prev])
       setIsNewMissionOpen(false)
-      setNewMission({
-        title: "",
-        type: "Phase 1",
-        date: toDateKey(today.getFullYear(), today.getMonth(), today.getDate()),
-        time: "09:00",
-        city: "",
-        location: "",
-        coordinator: "",
-        description: "",
-      })
+      setNewMission(defaultNewMissionState(todayKey)) // Reset form to default
     } catch (err: any) {
       console.error("Create schedule error:", err)
       setError(err?.response?.data?.message || "Failed to create schedule")
@@ -356,7 +461,11 @@ export default function SchedulingPage() {
         type: updated.type || (updated.mission_name && updated.mission_name.split(" - ")[0]) || (updateData.type || "Phase"),
         date: dt.date,
         time: dt.time || (updated.time ? normalizeDateTime(updated.time).time : updateData.time),
-        city: updated.AfterCareCity || updateData.city,
+
+        // --- FIX 3: Read 'aftercarecity' and fallback to 'city' or form state ---
+        city: updated.AfterCareCity || updated.aftercarecity || updated.city || updateData.city,
+        // --- END FIX 3 ---
+
         location: updated.location || updateData.location,
         coordinator: updated.coordinator || updateData.coordinator,
         status: updated.status || updateData.status,
@@ -394,23 +503,153 @@ export default function SchedulingPage() {
     }
   }
 
-  const submitNewMissionLocal = () => submitNewMission()
+  // UPDATED: This function now validates before submitting
+  const submitNewMissionLocal = () => {
+    setValidationErrors({}); // Clear old field errors
+    const errors = validateMission(newMission);
+
+    if (Object.keys(errors).length > 0) {
+      setValidationErrors(errors);
+      return; // Stop submission
+    }
+
+    // If validation passes, call the original API function
+    submitNewMission();
+  }
+
   const prevMonth = () => {
+    const newMonth = viewMonth === 0 ? 11 : viewMonth - 1
     if (viewMonth === 0) {
       setViewMonth(11)
       setViewYear(viewYear - 1)
     } else setViewMonth(viewMonth - 1)
+    // If user had 'current', switch to explicit month on navigation
+    setMonthFilter(typeof monthFilter === 'string' ? newMonth : newMonth)
   }
 
   const nextMonth = () => {
+    const newMonth = viewMonth === 11 ? 0 : viewMonth + 1
     if (viewMonth === 11) {
       setViewMonth(0)
       setViewYear(viewYear + 1)
     } else setViewMonth(viewMonth + 1)
+    setMonthFilter(typeof monthFilter === 'string' ? newMonth : newMonth)
   }
 
+  // NEW: Handle clicking the "Add New Mission" button
+  const handleAddNewClick = () => {
+    setValidationErrors({});
+    setError(null);
+    setNewMission(defaultNewMissionState(todayKey)); // Reset form to default with today's date
+    setIsNewMissionOpen(true);
+  }
+
+  // UPDATED: Handle clicking a calendar cell (now checks for notify mode)
+  const handleCellClick = (dateKey: string, missionsOnDay: Mission[]) => {
+    setError(null); // Clear errors for all paths
+    setNotifyError(null); // Clear notify errors
+
+    // NEW: Check if we are in 'Notify Mode'
+    if (isNotifyMode) {
+      if (missionsOnDay.length === 0) {
+        // Can't notify for an empty day
+        alert("Please select a day that has a scheduled mission.");
+        return;
+      }
+
+      // We have a schedule. Set it as the target and open the notify modal.
+      // We'll just pick the first mission of the day.
+      setNotifyTarget(missionsOnDay[0]);
+      setIsNotifyOpen(true);
+      setIsNotifyMode(false); // Exit notify mode
+      return; // Stop further execution
+    }
+
+    // --- Original Logic (if not in notify mode) ---
+    if (missionsOnDay.length === 0) {
+      // CLICKED EMPTY CELL: Open create dialog with cell's date
+      setValidationErrors({});
+      setNewMission(defaultNewMissionState(dateKey)); // Reset form but use the clicked date
+      setIsNewMissionOpen(true);
+    } else {
+      // CLICKED FILLED CELL: Open edit dialog for the first mission
+      setEditingMission(missionsOnDay[0]);
+    }
+  }
+
+  // NEW: Fetch sent messages
+  const openSentMessages = async () => {
+    setIsSentMessagesOpen(true)
+    setSentError(null)
+    setSentLoading(true)
+    try {
+      const token = typeof window !== "undefined" ? sessionStorage.getItem("token") || localStorage.getItem("token") : null
+      const res = await api.get("/api/sms/messages?limit=100", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      setSentMessages(Array.isArray(res.data?.data) ? res.data.data : [])
+    } catch (err: any) {
+      setSentError(err?.response?.data?.message || "Failed to load sent messages.")
+    } finally {
+      setSentLoading(false)
+    }
+  }
+
+  // NEW: Handle sending the schedule notification via SMS
+  const handleSendNotification = async () => {
+    if (!notifyTarget || !notifyTarget.city) {
+      setNotifyError("No schedule selected or schedule is missing a city.");
+      return;
+    }
+
+    // Create message from template
+    const messageTemplates: Record<string, string> = {
+      "Upcoming": `Friendly reminder: Your ${notifyTarget.title} mission in ${notifyTarget.city} is scheduled for ${formatMissionDate(notifyTarget)}. We look forward to seeing you!`,
+      "Complete": `Thank you for participating in the ${notifyTarget.title} mission in ${notifyTarget.city}.`,
+      "Postponed": `Notice: The ${notifyTarget.title} mission in ${notifyTarget.city} scheduled for ${formatMissionDate(notifyTarget)} has been postponed. We will update you with a new date soon.`
+    }
+
+    const message = messageTemplates[selectedMessageType];
+
+    if (!message) {
+      setNotifyError("Invalid message type selected.");
+      return;
+    }
+
+    setIsNotifying(true);
+    setNotifyError(null);
+
+    try {
+      const token = typeof window !== "undefined" ? sessionStorage.getItem("token") || localStorage.getItem("token") : null
+
+      const payload = {
+        AfterCareCity: notifyTarget.city,
+        message: message
+      }
+
+      const res = await api.post("/api/sms/send-schedule", payload, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
+      // On success: close modal, reset states, SHOW DIALOG (no alert)
+      setIsNotifyOpen(false);
+      setNotifyTarget(null);
+      setNotifySuccessMessage(res?.data?.message || "Notification sent successfully!");
+      setIsNotifySuccessOpen(true);
+
+    } catch (err: any)
+    {
+      console.error("Notify error:", err);
+      setNotifyError(err?.response?.data?.message || "Failed to send notification.");
+    } finally {
+      setIsNotifying(false);
+    }
+  }
+
+
   return (
-    <div className="p-6 space-y-6">
+    // --- HYDRATION FIX: Added suppressHydrationWarning ---
+    <div className="p-6 space-y-6" suppressHydrationWarning>
       <div className="flex justify-between items-center">
         <div className="flex gap-3 items-center">
           <CalendarIcon className="h-6 w-6 text-primary" />
@@ -418,7 +657,13 @@ export default function SchedulingPage() {
         </div>
         <div className="flex gap-2 items-center">
           <Button variant="ghost" onClick={prevMonth}><ChevronLeft className="h-4 w-4" /></Button>
-          <div className="text-sm font-medium">{new Date(viewYear, viewMonth).toLocaleString(undefined, { month: "long", year: "numeric" })}</div>
+          <div className="text-sm font-medium">
+            {/* --- HYDRATION FIX: Conditional render for locale string --- */}
+            {isClient
+              ? new Date(viewYear, viewMonth).toLocaleString(undefined, { month: "long", year: "numeric" })
+              : new Date(viewYear, viewMonth).toLocaleDateString('en-US', { month: "long", year: "numeric" }) // Stable server fallback
+            }
+          </div>
           <Button variant="ghost" onClick={nextMonth}><ChevronRight className="h-4 w-4" /></Button>
         </div>
       </div>
@@ -444,28 +689,43 @@ export default function SchedulingPage() {
                 const dateKey = toDateKey(cellYear, cellMonth, cell.day)
                 const isCurrentMonth = cell.monthOffset === 0
                 const list = missionsByDate.get(dateKey) || []
-                const isToday = dateKey === toDateKey(today.getFullYear(), today.getMonth(), today.getDate())
+                
+                // --- HYDRATION FIX: isToday check is now safe ---
+                const isToday = dateKey === todayKey
 
                 // use status group for dot color but keep raw status for title
                 const uniqueStatuses = Array.from(new Set(list.map((x) => `${statusToGroup(x.status)}|${x.status || ""}`)))
                 const dotsToShow = uniqueStatuses.slice(0, 3)
 
                 return (
-                  // highlight cell when there are schedules for that date (use first mission status as representative)
+                  // UPDATED: Added onClick, cursor-pointer, and hover effect
                   <div
                     key={`${wi}-${cell.key}`}
-                    className={`border rounded p-2 min-h-[80px] ${!isCurrentMonth ? "bg-gray-50 text-muted-foreground" : (list.length ? getCellBg(list[0]?.status) : "")}`}
+                    onClick={() => handleCellClick(dateKey, list)}
+                    className={`border rounded p-2 min-h-[80px] cursor-pointer transition-colors ${
+                      isNotifyMode ? "hover:border-primary hover:border-2" : "" // Highlight on hover in notify mode
+                    } ${
+                      !isCurrentMonth
+                        ? "bg-gray-50 text-muted-foreground hover:bg-gray-100"
+                        : (list.length ? `${getCellBg(list[0]?.status)} hover:bg-opacity-70` : "bg-white hover:bg-gray-100")
+                    }`}
                   >
                     <div className="flex justify-between items-start">
                       <div className={`flex flex-col`}>
                         <div className={`text-sm font-medium ${isToday ? "text-red-600" : ""}`}>{cell.day}</div>
-                        {/* show representative name/location when there's at least one schedule */}
+                        {/* show representative name */}
                         {list.length > 0 && (
                           <div className="text-xs text-muted-foreground truncate max-w-[8rem]">
-                            {list[0]?.location || list[0]?.title}
+                            {list[0]?.title}
+                          </div>
+                        )}
+                        {list.length > 0 && (list[0]?.city || list[0]?.location) && (
+                          <div className="text-xs text-muted-foreground truncate max-w-[8rem]">
+                            {list[0]?.city || list[0]?.location}
                           </div>
                         )}
                       </div>
+
                       <div className="flex items-center gap-1">
                         {list.length > 0 && (
                           <div className="flex items-center gap-1">
@@ -500,131 +760,213 @@ export default function SchedulingPage() {
             <div className="flex items-center gap-1"><Badge className="bg-green-100 text-green-800">Completed</Badge></div>
             <div className="flex items-center gap-1"><Badge className="bg-red-100 text-red-800">Postponed</Badge></div>
           </div>
+           <div className="mt-6 grid grid-cols-3 gap-4">
+             <Card>
+               <CardHeader>
+                 <CardTitle>Upcoming</CardTitle>
+               </CardHeader>
+               <CardContent>
+                 {upcoming.length === 0 && <div className="text-sm text-muted-foreground">No upcoming missions</div>}
+                 <div className="space-y-2">
+                   {upcoming.map((m) => (
+                     <div key={m.id} className="p-2 border rounded bg-white flex justify-between items-start">
+                       <div>
+                         <div className="text-sm font-medium">{m.title}</div>
+                         <div className="text-xs text-muted-foreground">{formatMissionDate(m)}{m.city ? ` • ${m.city}` : ""}</div>
+                       </div>
+                       <div className="flex flex-col items-end gap-2">
+                         <Badge className={getStatusColor(statusToGroup(m.status))}>{m.status || statusToGroup(m.status)}</Badge>
+                         <div className="flex gap-1">
+                           <Button size="sm" variant="ghost" onClick={() => setEditingMission(m)}><Edit className="h-4 w-4" /></Button>
+                           <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(m)}><Trash className="h-4 w-4 text-destructive" /></Button>
+                         </div>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               </CardContent>
+             </Card>
 
-          {/* KANBAN BOARD */}
-          <div className="mt-6 grid grid-cols-3 gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Upcoming</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {upcoming.length === 0 && <div className="text-sm text-muted-foreground">No upcoming missions</div>}
-                <div className="space-y-2">
-                  {upcoming.map((m) => (
-                    <div key={m.id} className="p-2 border rounded bg-white flex justify-between items-start">
-                      <div>
-                        <div className="text-sm font-medium">{m.title}</div>
-                        <div className="text-xs text-muted-foreground">{formatMissionDate(m)}{m.city ? ` • ${m.city}` : ""}</div>
-                      </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <Badge className={getStatusColor(statusToGroup(m.status))}>{m.status || statusToGroup(m.status)}</Badge>
-                        <div className="flex gap-1">
-                          <Button size="sm" variant="ghost" onClick={() => setEditingMission(m)}><Edit className="h-4 w-4" /></Button>
-                          <Button size="sm" variant="ghost" onClick={() => deleteSchedule(m.id)}><Trash className="h-4 w-4 text-destructive" /></Button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+             <Card>
+               <CardHeader>
+                 <CardTitle>Postponed</CardTitle>
+               </CardHeader>
+               <CardContent>
+                 {postponed.length === 0 && <div className="text-sm text-muted-foreground">No postponed missions</div>}
+                 <div className="space-y-2">
+                   {postponed.map((m) => (
+                     <div key={m.id} className="p-2 border rounded bg-white flex justify-between items-start">
+                       <div>
+                         <div className="text-sm font-medium">{m.title}</div>
+                         <div className="text-xs text-muted-foreground">{formatMissionDate(m)}{m.city ? ` • ${m.city}` : ""}</div>
+                       </div>
+                       <div className="flex flex-col items-end gap-2">
+                         <Badge className={getStatusColor(statusToGroup(m.status))}>{m.status || statusToGroup(m.status)}</Badge>
+                         <div className="flex gap-1">
+                           <Button size="sm" variant="ghost" onClick={() => setEditingMission(m)}><Edit className="h-4 w-4" /></Button>
+                           <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(m)}><Trash className="h-4 w-4 text-destructive" /></Button>
+                         </div>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               </CardContent>
+             </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Postponed</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {postponed.length === 0 && <div className="text-sm text-muted-foreground">No postponed missions</div>}
-                <div className="space-y-2">
-                  {postponed.map((m) => (
-                    <div key={m.id} className="p-2 border rounded bg-white flex justify-between items-start">
-                      <div>
-                        <div className="text-sm font-medium">{m.title}</div>
-                        <div className="text-xs text-muted-foreground">{formatMissionDate(m)}{m.city ? ` • ${m.city}` : ""}</div>
-                      </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <Badge className={getStatusColor(statusToGroup(m.status))}>{m.status || statusToGroup(m.status)}</Badge>
-                        <div className="flex gap-1">
-                          <Button size="sm" variant="ghost" onClick={() => setEditingMission(m)}><Edit className="h-4 w-4" /></Button>
-                          <Button size="sm" variant="ghost" onClick={() => deleteSchedule(m.id)}><Trash className="h-4 w-4 text-destructive" /></Button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Completed</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {completed.length === 0 && <div className="text-sm text-muted-foreground">No completed missions</div>}
-                <div className="space-y-2">
-                  {completed.map((m) => (
-                    <div key={m.id} className="p-2 border rounded bg-white flex justify-between items-start">
-                      <div>
-                        <div className="text-sm font-medium">{m.title}</div>
-                        <div className="text-xs text-muted-foreground">{formatMissionDate(m)}{m.city ? ` • ${m.city}` : ""}</div>
-                      </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <Badge className={getStatusColor(statusToGroup(m.status))}>{m.status || statusToGroup(m.status)}</Badge>
-                        <div className="flex gap-1">
-                          <Button size="sm" variant="ghost" onClick={() => setEditingMission(m)}><Edit className="h-4 w-4" /></Button>
-                          <Button size="sm" variant="ghost" onClick={() => deleteSchedule(m.id)}><Trash className="h-4 w-4 text-destructive" /></Button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+             <Card>
+               <CardHeader>
+                 <CardTitle>Completed</CardTitle>
+               </CardHeader>
+               <CardContent>
+                 {completed.length === 0 && <div className="text-sm text-muted-foreground">No completed missions</div>}
+                 <div className="space-y-2">
+                   {completed.map((m) => (
+                     <div key={m.id} className="p-2 border rounded bg-white flex justify-between items-start">
+                       <div>
+                         <div className="text-sm font-medium">{m.title}</div>
+                         <div className="text-xs text-muted-foreground">{formatMissionDate(m)}{m.city ? ` • ${m.city}` : ""}</div>
+                       </div>
+                       <div className="flex flex-col items-end gap-2">
+                         <Badge className={getStatusColor(statusToGroup(m.status))}>{m.status || statusToGroup(m.status)}</Badge>
+                         <div className="flex gap-1">
+                           <Button size="sm" variant="ghost" onClick={() => setEditingMission(m)}><Edit className="h-4 w-4" /></Button>
+                           <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(m)}><Trash className="h-4 w-4 text-destructive" /></Button>
+                         </div>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               </CardContent>
+             </Card>
+           </div>
         </main>
 
         {/* FILTERS + BUTTONS - RIGHT SIDE */}
-        <aside className="col-span-3 order-2">
+        <aside className="col-span-3 order-2 space-y-6">
           <Card>
-            <CardHeader><CardTitle>Filters</CardTitle></CardHeader>
+            <CardHeader><CardTitle>Filter</CardTitle></CardHeader>
             <CardContent className="space-y-3">
-              <div>
-                <Label>AfterCare City</Label>
-                <Select value={selectedCity} onValueChange={setSelectedCity}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Cities</SelectItem>
-                    <SelectItem value="Manila">Manila</SelectItem>
-                    <SelectItem value="Cebu">Cebu</SelectItem>
-                    <SelectItem value="Davao">Davao</SelectItem>
-                    <SelectItem value="Iloilo">Iloilo</SelectItem>
-                  </SelectContent>
-                </Select>
+              {/* SINGLE MONTH FILTER */}
+              <div className="space-y-1">
+                <Label className="block text-sm font-medium">Filters</Label>
+                <div className="flex gap-2">
+                  {/* STATUS FILTER */}
+                  <div className="flex-1">
+                    <Select
+                      value={statusFilter}
+                      onValueChange={(v) => setStatusFilter(v as any)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="upcoming">Upcoming</SelectItem>
+                        <SelectItem value="completed">Completed</SelectItem>
+                        <SelectItem value="postponed">Postponed</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {/* MONTH FILTER */}
+                  <div className="flex-1">
+                    <Select
+                      value={monthFilter === 'current' ? 'current' : String(monthFilter)}
+                      onValueChange={(v) => {
+                        if (v === 'current') {
+                          const cm = new Date().getMonth()
+                          setMonthFilter('current')
+                          setViewMonth(cm)
+                          setViewYear(new Date().getFullYear())
+                        } else {
+                          const mv = parseInt(v, 10)
+                          setMonthFilter(mv)
+                          setViewMonth(mv)
+                          setViewYear(new Date().getFullYear())
+                        }
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Month" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="current">Current</SelectItem>
+                        {MONTHS.map((m, i) => (
+                          <SelectItem key={i} value={String(i)}>{m}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
               </div>
 
               <Separator />
 
               <div className="mt-4 flex flex-col gap-2">
-                <Button onClick={() => setIsNotifyOpen(true)} variant="outline">Notify Patient via SMS</Button>
+                {/* UPDATED: This button now toggles 'Notify Mode' */}
+                <Button
+                  onClick={() => setIsNotifyMode(true)}
+                  variant="outline"
+                  disabled={isNotifyMode} // Disable if already in notify mode
+                >
+                  {isNotifyMode ? "Select a schedule..." : "Notify Patient via SMS"}
+                </Button>
+
+                {/* NEW: View sent messages */}
+                <Button variant="secondary" onClick={openSentMessages}>
+                  View Sent Messages
+                </Button>
+
                 <RoleGuard allowedRoles={["Admin", "Country Coordinator", "City Coordinator"]}>
-                  <Button onClick={() => setIsNewMissionOpen(true)}>
+                  <Button onClick={handleAddNewClick}>
                     <Plus className="h-4 w-4 mr-2" /> Add New Mission
                   </Button>
                 </RoleGuard>
               </div>
+
+              {/* NEW: Add a helper text when in notify mode */}
+              {isNotifyMode && (
+                <div className="p-2 text-sm text-primary border border-primary/50 rounded bg-primary/10">
+                  Click a schedule on the calendar to send a notification.
+                  <Button variant="link" size="sm" className="p-0 h-auto ml-2" onClick={() => setIsNotifyMode(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         </aside>
       </div>
 
 
+      {/* NOTIFY MODAL - UPDATED */}
+      <Dialog open={isNotifyOpen} onOpenChange={(isOpen) => {
+        setIsNotifyOpen(isOpen);
+        if (!isOpen) {
+          // Clear states on close
+          setNotifyTarget(null);
+          setNotifyError(null);
+          setIsNotifying(false);
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Notify Patients</DialogTitle></DialogHeader>
 
+          {/* Show schedule info */}
+          {notifyTarget && (
+            <div className="space-y-2 p-3 bg-muted rounded-md">
+              <p className="text-sm font-medium">Schedule Details:</p>
+              <div className="text-sm">
+                <strong>{notifyTarget.title}</strong>
+              </div>
+              <div className="text-sm text-muted-foreground">
+                {formatMissionDate(notifyTarget)}
+              </div>
+              <div className="text-sm text-muted-foreground">
+                City: <strong>{notifyTarget.city || "N/A"}</strong>
+              </div>
+            </div>
+          )}
 
-
-      {/* NOTIFY MODAL */}
-      <Dialog open={isNotifyOpen} onOpenChange={setIsNotifyOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader><DialogTitle>Notify Patient</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
             <Label>Select Message Type</Label>
             <Select value={selectedMessageType} onValueChange={setSelectedMessageType}>
@@ -635,16 +977,52 @@ export default function SchedulingPage() {
                 <SelectItem value="Postponed">Mission Postponed</SelectItem>
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">
+              This will send an SMS to all patients registered for the
+              AfterCare city: <strong>{notifyTarget?.city || "N/A"}</strong>.
+            </p>
           </div>
+
+          {/* Show API error */}
+          {notifyError && (
+            <p className="text-sm text-red-500">{notifyError}</p>
+          )}
+
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setIsNotifyOpen(false)}>Cancel</Button>
-            <Button onClick={() => alert(`Patient notified: ${selectedMessageType}`)}>Send Notification</Button>
+            <Button variant="outline" onClick={() => setIsNotifyOpen(false)} disabled={isNotifying}>Cancel</Button>
+            {/* UPDATED: onClick now calls the API handler */}
+            <Button
+              onClick={handleSendNotification}
+              disabled={isNotifying || !notifyTarget?.city}
+            >
+              {isNotifying ? "Sending..." : "Send Notification"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* NOTIFY SUCCESS DIALOG - NEW */}
+      <Dialog open={isNotifySuccessOpen} onOpenChange={(o) => setIsNotifySuccessOpen(o)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Notification Sent</DialogTitle></DialogHeader>
+          <p className="text-sm">{notifySuccessMessage || "Notification sent successfully!"}</p>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" onClick={() => setIsNotifySuccessOpen(false)}>Close</Button>
+            <Button onClick={() => { setIsNotifySuccessOpen(false); openSentMessages(); }}>
+              View Sent Messages
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
 
       {/* CREATE DIALOG */}
-      <Dialog open={isNewMissionOpen} onOpenChange={setIsNewMissionOpen}>
+      <Dialog open={isNewMissionOpen} onOpenChange={(isOpen) => {
+        setIsNewMissionOpen(isOpen);
+        if (!isOpen) {
+          setValidationErrors({}); // Clear validation errors
+          setError(null); // Clear API error
+        }
+      }}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Schedule Mission</DialogTitle>
@@ -652,78 +1030,77 @@ export default function SchedulingPage() {
 
           <div className="grid gap-3 py-4">
             <div>
-              <Label>Mission Name</Label>
+              <Label htmlFor="new-title">Mission Name</Label>
               <Input
+                id="new-title"
                 value={newMission.title || ""}
                 onChange={(e) =>
                   setNewMission({ ...newMission, title: e.target.value })
                 }
                 placeholder="Enter mission name"
-                required
               />
+              {validationErrors.title && <p className="text-sm text-red-500 mt-1">{validationErrors.title}</p>}
             </div>
 
             <div>
-              <Label>Description</Label>
+              <Label htmlFor="new-desc">Description</Label>
               <Textarea
+                id="new-desc"
                 value={newMission.description || ""}
                 onChange={(e) =>
                   setNewMission({ ...newMission, description: e.target.value })
                 }
                 placeholder="Enter mission description"
-                required
               />
+              {validationErrors.description && <p className="text-sm text-red-500 mt-1">{validationErrors.description}</p>}
             </div>
 
+            {/* --- START MODIFICATION --- */}
             <div>
-              <Label>AfterCare City</Label>
-              <Select
+              <Label htmlFor="new-city">AfterCare City</Label>
+              <Input
+                id="new-city"
                 value={newMission.city || ""}
-                onValueChange={(v) =>
-                  setNewMission({ ...newMission, city: v })
+                onChange={(e) =>
+                  setNewMission({ ...newMission, city: e.target.value })
                 }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select city" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Manila">Manila</SelectItem>
-                  <SelectItem value="Cebu">Cebu</SelectItem>
-                  <SelectItem value="Davao">Davao</SelectItem>
-                  <SelectItem value="Iloilo">Iloilo</SelectItem>
-                </SelectContent>
-              </Select>
+                placeholder="Enter city name"
+              />
+              {validationErrors.city && <p className="text-sm text-red-500 mt-1">{validationErrors.city}</p>}
             </div>
+            {/* --- END MODIFICATION --- */}
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label>Date</Label>
+                <Label htmlFor="new-date">Date</Label>
                 <Input
+                  id="new-date"
                   type="date"
                   value={newMission.date || ""}
                   onChange={(e) =>
                     setNewMission({ ...newMission, date: e.target.value })
                   }
-                  required
                 />
+                {validationErrors.date && <p className="text-sm text-red-500 mt-1">{validationErrors.date}</p>}
               </div>
               <div>
-                <Label>Time</Label>
+                <Label htmlFor="new-time">Time</Label>
                 <Input
+                  id="new-time"
                   type="time"
                   value={newMission.time || ""}
                   onChange={(e) =>
                     setNewMission({ ...newMission, time: e.target.value })
                   }
-                  required
                 />
+                {validationErrors.time && <p className="text-sm text-red-500 mt-1">{validationErrors.time}</p>}
               </div>
             </div>
 
             <div>
               <Label>Status</Label>
               <Select
-                value={newMission.status || "Pending"}
+                value={newMission.status || ""}
                 onValueChange={(v) => setNewMission({ ...newMission, status: v })}
               >
                 <SelectTrigger>
@@ -731,12 +1108,15 @@ export default function SchedulingPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="Upcoming">Upcoming</SelectItem>
-                  <SelectItem value="Completed">Complete</SelectItem>
+                  <SelectItem value="Completed">Completed</SelectItem>
                   <SelectItem value="Postponed">Postponed</SelectItem>
                 </SelectContent>
               </Select>
+              {validationErrors.status && <p className="text-sm text-red-500 mt-1">{validationErrors.status}</p>}
             </div>
           </div>
+
+          {error && <p className="text-sm text-red-500 mb-2">{error}</p>}
 
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setIsNewMissionOpen(false)}>
@@ -748,7 +1128,10 @@ export default function SchedulingPage() {
       </Dialog>
 
       {/* EDIT DIALOG */}
-      <Dialog open={!!editingMission} onOpenChange={() => setEditingMission(null)}>
+      <Dialog open={!!editingMission} onOpenChange={(isOpen) => {
+        setEditingMission(isOpen ? editingMission : null);
+        if (!isOpen) setError(null); // Clear API error on close
+      }}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Edit Schedule</DialogTitle>
@@ -772,23 +1155,16 @@ export default function SchedulingPage() {
                 />
               </div>
 
+              {/* --- START MODIFICATION --- */}
               <div>
                 <Label>AfterCare City</Label>
-                <Select
+                <Input
                   value={editingMission.city || ""}
-                  onValueChange={(v) => setEditingMission({ ...editingMission, city: v })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select city" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Manila">Manila</SelectItem>
-                    <SelectItem value="Cebu">Cebu</SelectItem>
-                    <SelectItem value="Davao">Davao</SelectItem>
-                    <SelectItem value="Iloilo">Iloilo</SelectItem>
-                  </SelectContent>
-                </Select>
+                  onChange={(e) => setEditingMission({ ...editingMission, city: e.target.value })}
+                  placeholder="Enter city name"
+                />
               </div>
+              {/* --- END MODIFICATION --- */}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -801,24 +1177,24 @@ export default function SchedulingPage() {
                 </div>
               </div>
 
-<div>
-  <Label>Status</Label>
-  <Select
-    value={newMission.status || undefined}
-    onValueChange={(v) => setNewMission({ ...newMission, status: v })}
-  >
-    <SelectTrigger>
-      <SelectValue placeholder="Select status" />
-    </SelectTrigger>
-    <SelectContent>
-      <SelectItem value="Upcoming">Upcoming</SelectItem>
-      <SelectItem value="Completed">Completed</SelectItem>
-      <SelectItem value="Postponed">Postponed</SelectItem>
-    </SelectContent>
-  </Select>
-</div>
+              <div>
+                <Label>Status</Label>
+                <Select
+                  value={editingMission.status || ""}
+                  onValueChange={(v) => setEditingMission({ ...editingMission, status: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Upcoming">Upcoming</SelectItem>
+                    <SelectItem value="Completed">Completed</SelectItem>
+                    <SelectItem value="Postponed">Postponed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-              {error && <div className="text-red-500">{error}</div>}
+              {error && <div className="text-red-500 text-sm mt-2">{error}</div>}
 
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="outline" onClick={() => setEditingMission(null)}>Cancel</Button>
@@ -843,6 +1219,7 @@ export default function SchedulingPage() {
           )}
         </DialogContent>
       </Dialog>
+
       {/* CONFIRM DELETE MODAL */}
       <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
         <DialogContent className="max-w-sm">
@@ -861,8 +1238,56 @@ export default function SchedulingPage() {
           <div className="flex justify-end gap-2 mt-4">
             <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
             <Button variant="destructive" onClick={() => deleteTarget && deleteSchedule(deleteTarget.id)} disabled={loading}>
+              {loading ? "Deleting..." : "Delete"}
             </Button>
-            {loading ? "Deleting..." : "Delete"}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* SENT MESSAGES DIALOG - NEW */}
+      <Dialog
+        open={isSentMessagesOpen}
+        onOpenChange={(open) => {
+          setIsSentMessagesOpen(open)
+          if (!open) {
+            setSentMessages([])
+            setSentError(null)
+          } else {
+            // If opened via click and not preloaded, ensure data is present
+            if (sentMessages.length === 0 && !sentLoading) openSentMessages()
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader><DialogTitle>Sent Messages</DialogTitle></DialogHeader>
+          {sentLoading && <p className="text-sm text-muted-foreground">Loading...</p>}
+          {sentError && <p className="text-sm text-red-500">{sentError}</p>}
+          {!sentLoading && !sentError && (
+            <div className="max-h-[400px] overflow-y-auto divide-y">
+              {sentMessages.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No messages found.</p>
+              ) : (
+                sentMessages.map((msg) => (
+                  <div key={msg.sms_id || msg.created_at} className="py-3">
+                    <div className="flex items-start justify-between">
+                      <div className="text-sm font-medium">{msg.message_type || "Schedule"}</div>
+                      {msg.created_at && (
+                        <div className="text-xs text-muted-foreground">
+                          {new Date(msg.created_at).toLocaleString()}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-1 text-sm whitespace-pre-wrap">{msg.message_content}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Recipients: {msg.recipient_count ?? 0}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+          <div className="flex justify-end">
+            <Button variant="outline" onClick={() => setIsSentMessagesOpen(false)}>Close</Button>
           </div>
         </DialogContent>
       </Dialog>

@@ -8,8 +8,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Lock, Loader2, Eye, EyeOff } from "lucide-react"
+import { Lock, Loader2, Eye, EyeOff, FileText } from "lucide-react"
 import Image from "next/image"
+// ADD: Dialog imports
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL,
@@ -87,6 +89,17 @@ export default function StarkeySystemLoginPage() {
     general: "" 
   })
   const [showTermsModal, setShowTermsModal] = useState(false)
+  // ADD: local terms dialog state
+  const [termsChecked, setTermsChecked] = useState(false)
+  const [termsScrolled, setTermsScrolled] = useState(false)
+  const [otpStep, setOtpStep] = useState(false)           // ADDED
+  const [otpCode, setOtpCode] = useState("")              // ADDED
+  const [pendingToken, setPendingToken] = useState<string | null>(null)  // ADDED
+  const [pendingUser, setPendingUser] = useState<any>(null)              // ADDED
+  const [otpSending, setOtpSending] = useState(false)     // ADDED
+  const [otpVerifying, setOtpVerifying] = useState(false) // ADDED
+  // ADD: control dialog visibility
+  const [isOtpDialogOpen, setIsOtpDialogOpen] = useState(false)
   const router = useRouter()
 
   const validateForm = useCallback((): boolean => {
@@ -222,56 +235,102 @@ export default function StarkeySystemLoginPage() {
       if (res.status !== 200) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
 
       const { token, user } = res.data.data
-      if (!token || !user || !user.roles) throw new Error("Invalid authentication response from server")
+      if (!token || !user) throw new Error("Invalid authentication response from server")
 
-      secureStorage.setItem("token", token)
-      secureStorage.setItem("user", JSON.stringify(user))
-      secureStorage.setItem("userRole", Array.isArray(user.roles) ? user.roles[0] : user.roles)
+      // Ensure phone exists
+      if (!user.phone_number) {
+        throw new Error("No phone number on file. Please contact admin.")
+      }
 
-      rememberMe
-        ? secureStorage.setItem("rememberedUser", loginForm.username.trim())
-        : secureStorage.removeItem("rememberedUser")
+      // Save pending, do NOT persist token yet
+      setPendingToken(token)
+      setPendingUser(user)
 
-      secureStorage.removeItem("loginAttempts")
-      secureStorage.removeItem("lastLoginAttempt")
-      secureStorage.removeItem("lockTime")
-      setLoginAttempts(0)
-      setLoginForm((prev) => ({ ...prev, role: user.role }))
-      router.push("/dashboard")
+      // Send OTP
+      setOtpSending(true)
+      await api.post("/api/sms/send-otp", {
+        user_id: user.user_id || user.id,
+        phone_number: user.phone_number,
+      })
+      setOtpStep(true) // Show OTP step
+      setIsOtpDialogOpen(true) // OPEN DIALOG
+      setErrors((prev) => ({ ...prev, general: "OTP sent. Please enter the code to continue." }))
     } catch (err: any) {
       if (axios.isCancel(err)) {
         setErrors((prev) => ({ ...prev, general: "Request timed out. Please try again." }))
-        return
-      }
-
-      if (err.response?.status === 401) {
-        const attempts = loginAttempts + 1
-        setLoginAttempts(attempts)
-        secureStorage.setItem("loginAttempts", attempts.toString())
-        secureStorage.setItem("lastLoginAttempt", Date.now().toString())
-
-        if (attempts >= 5) {
-          setIsLocked(true)
-          setLockTime(300)
-          secureStorage.setItem("lockTime", "300")
-          setErrors((prev) => ({
-            ...prev,
-            general: "Too many failed attempts. Account locked for 5 minutes.",
-          }))
-        } else {
-          setErrors((prev) => ({
-            ...prev,
-            general: `Invalid username or password. ${5 - attempts} attempts remaining.`,
-          }))
-        }
       } else {
         setErrors((prev) => ({
           ...prev,
-          general: err.response?.data?.message || err.message || "Login failed. Please try again.",
+          general: err?.response?.data?.message || err.message || "Login failed. Please try again.",
         }))
       }
     } finally {
+      setOtpSending(false)
       setLoading(false)
+    }
+  }
+
+  // ADDED: Verify OTP, then persist token and proceed
+  const handleVerifyOtp = async () => {
+    if (!pendingUser || !pendingToken) {
+      setErrors((prev) => ({ ...prev, general: "No pending session. Please login again." }))
+      return
+    }
+    if (!otpCode.trim()) {
+      setErrors((prev) => ({ ...prev, general: "Please enter the OTP code." }))
+      return
+    }
+    setOtpVerifying(true)
+    setErrors((prev) => ({ ...prev, general: "" }))
+    try {
+      const res = await api.post("/api/sms/verify-otp", {
+        user_id: pendingUser.user_id || pendingUser.id,
+        otp_code: otpCode.trim(),
+      })
+      if (res.status === 200) {
+        // Now persist token and user, then redirect
+        secureStorage.setItem("token", pendingToken)
+        secureStorage.setItem("user", JSON.stringify(pendingUser))
+        secureStorage.setItem("userRole", Array.isArray(pendingUser.roles) ? pendingUser.roles[0] : pendingUser.roles)
+
+        rememberMe
+          ? secureStorage.setItem("rememberedUser", loginForm.username.trim())
+          : secureStorage.removeItem("rememberedUser")
+
+        secureStorage.removeItem("loginAttempts")
+        secureStorage.removeItem("lastLoginAttempt")
+        secureStorage.removeItem("lockTime")
+        setLoginAttempts(0)
+        router.push("/dashboard")
+        // CLOSE OTP dialog after success
+        setIsOtpDialogOpen(false)
+      } else {
+        throw new Error("Invalid server response.")
+      }
+    } catch (err: any) {
+      setErrors((prev) => ({
+        ...prev,
+        general: err?.response?.data?.message || err.message || "OTP verification failed.",
+      }))
+    } finally {
+      setOtpVerifying(false)
+    }
+  }
+
+  // ADDED: Resend OTP
+  const handleResendOtp = async () => {
+    if (!pendingUser) return
+    setOtpSending(true)
+    try {
+      await api.post("/api/sms/send-otp", {
+        user_id: pendingUser.user_id || pendingUser.id,
+        phone_number: pendingUser.phone_number,
+      })
+      setErrors((prev) => ({ ...prev, general: "OTP re-sent." }))
+    } catch (err: any) {
+      setErrors((prev) => ({ ...prev, general: err?.response?.data?.message || "Failed to resend OTP." }))
+    } finally {
+      setOtpSending(false)
     }
   }
 
@@ -446,7 +505,7 @@ export default function StarkeySystemLoginPage() {
                 <Button
                   type="submit"
                   className="w-full h-11 text-base font-medium bg-gradient-to-r from-blue-700 to-blue-500 hover:from-blue-800 hover:to-blue-600 transition-all duration-200"
-                  disabled={loading || isLocked}
+                  disabled={loading || isLocked || otpStep} // keep disabled while OTP is pending
                 >
                   {loading ? (
                     <>
@@ -460,6 +519,8 @@ export default function StarkeySystemLoginPage() {
                   )}
                 </Button>
               </div>
+
+              {/* REMOVE inline OTP UI (moved to dialog) */}
             </form>
 
             {/* Security Notice */}
@@ -480,97 +541,265 @@ export default function StarkeySystemLoginPage() {
         </div>
       </div>
 
-      {/* Terms and Conditions Modal */}
-      {showTermsModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-hidden">
-            <div className="p-6 border-b">
-              <h2 className="text-xl font-bold text-gray-900">Terms and Conditions</h2>
+      {/* OTP Dialog */}
+      <Dialog
+        open={isOtpDialogOpen}
+        onOpenChange={(open) => {
+          setIsOtpDialogOpen(open)
+          if (!open) {
+            // Cancel OTP flow when closed
+            setOtpStep(false)
+            setOtpCode("")
+            setPendingToken(null)
+            setPendingUser(null)
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Two-Factor Verification</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Enter the 6-digit code sent to{" "}
+              <strong>{pendingUser?.phone_number || "your phone"}</strong>.
+            </p>
+
+            <div className="space-y-1">
+              <Label htmlFor="otp">OTP Code</Label>
+              <Input
+                id="otp"
+                placeholder="6-digit code"
+                inputMode="numeric"
+                value={otpCode}
+                onChange={(e) => setOtpCode(e.target.value)}
+                autoFocus
+              />
             </div>
-            <div className="p-6 overflow-y-auto max-h-[60vh]">
-              <div className="space-y-4 text-sm text-gray-700">
-                <p>
-                  <strong>Last Updated:</strong> {new Date().toLocaleDateString()}
-                </p>
-                
-                <section>
-                  <h3 className="font-semibold text-gray-900 mb-2">1. Acceptance of Terms</h3>
-                  <p>
-                    By accessing and using the MediEase System, you accept and agree to be bound by the terms and 
-                    provision of this agreement.
-                  </p>
-                </section>
 
-                <section>
-                  <h3 className="font-semibold text-gray-900 mb-2">2. Use License</h3>
-                  <p>
-                    Permission is granted to temporarily use the MediEase System for internal business purposes 
-                    only. This is the grant of a license, not a transfer of title.
-                  </p>
-                </section>
+            {errors.general && (
+              <p className="text-sm text-red-500">⚠ {errors.general}</p>
+            )}
+          </div>
 
-                <section>
-                  <h3 className="font-semibold text-gray-900 mb-2">3. User Account</h3>
-                  <p>
-                    You are responsible for maintaining the confidentiality of your account and password and for 
-                    restricting access to your computer. You agree to accept responsibility for all activities 
-                    that occur under your account.
-                  </p>
-                </section>
+          <DialogFooter className="mt-2 flex justify-between sm:justify-between">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={async () => {
+                if (!pendingUser) return
+                setOtpSending(true)
+                try {
+                  await api.post("/api/sms/send-otp", {
+                    user_id: pendingUser.user_id || pendingUser.id,
+                    phone_number: pendingUser.phone_number,
+                  })
+                  setErrors((prev) => ({ ...prev, general: "OTP re-sent." }))
+                } catch (err: any) {
+                  setErrors((prev) => ({ ...prev, general: err?.response?.data?.message || "Failed to resend OTP." }))
+                } finally {
+                  setOtpSending(false)
+                }
+              }}
+              disabled={otpSending}
+            >
+              {otpSending ? "Sending…" : "Resend OTP"}
+            </Button>
 
-                <section>
-                  <h3 className="font-semibold text-gray-900 mb-2">4. Privacy Policy</h3>
-                  <p>
-                    Your use of the MediEase System is also governed by our Privacy Policy. Please review our 
-                    Privacy Policy, which also governs the site and informs users of our data collection practices.
-                  </p>
-                </section>
-
-                <section>
-                  <h3 className="font-semibold text-gray-900 mb-2">5. Prohibited Uses</h3>
-                  <p>
-                    You may not use the MediEase System in any manner that could damage, disable, overburden, 
-                    or impair the system or interfere with any other party&apos;s use and enjoyment of the system.
-                  </p>
-                </section>
-
-                <section>
-                  <h3 className="font-semibold text-gray-900 mb-2">6. Termination</h3>
-                  <p>
-                    We may terminate or suspend your account and bar access to the system immediately, without 
-                    prior notice or liability, under our sole discretion, for any reason whatsoever.
-                  </p>
-                </section>
-
-                <section>
-                  <h3 className="font-semibold text-gray-900 mb-2">7. Governing Law</h3>
-                  <p>
-                    These Terms shall be governed and construed in accordance with the laws of the United States, 
-                    without regard to its conflict of law provisions.
-                  </p>
-                </section>
-              </div>
-            </div>
-            <div className="p-6 border-t flex justify-end space-x-3">
+            <div className="flex gap-2">
               <Button
+                type="button"
                 variant="outline"
-                onClick={() => setShowTermsModal(false)}
-              >
-                Close
-              </Button>
-              <Button
                 onClick={() => {
-                  handleInputChange("acceptTerms", true)
-                  setShowTermsModal(false)
+                  setIsOtpDialogOpen(false)
+                  setOtpStep(false)
+                  setOtpCode("")
+                  setPendingToken(null)
+                  setPendingUser(null)
                 }}
-                className="bg-blue-600 hover:bg-blue-700"
               >
-                Accept Terms
+                Cancel
               </Button>
+              <Button type="button" onClick={handleVerifyOtp} disabled={otpVerifying}>
+                {otpVerifying ? "Verifying…" : "Verify OTP"}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Terms and Conditions Dialog (polished) */}
+      <Dialog
+        open={showTermsModal}
+        onOpenChange={(open) => {
+          setShowTermsModal(open)
+          if (!open) {
+            setTermsChecked(false)
+            setTermsScrolled(false)
+          }
+        }}
+      >
+        <DialogContent className="w-[100vw] max-w-7xl">
+          <DialogHeader className="space-y-1">
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-blue-600" />
+              Terms and Conditions
+            </DialogTitle>
+            <DialogDescription>
+              Please review the following terms carefully. Last updated: {new Date().toLocaleDateString()}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div
+            className="max-h-[60vh] overflow-auto rounded-md border bg-muted/20 p-5 text-sm"
+            onScroll={(e) => {
+              const el = e.currentTarget
+              if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) {
+                setTermsScrolled(true)
+              }
+            }}
+          >
+            <div className="space-y-5 text-gray-700">
+              <section>
+                <h3 className="font-semibold text-gray-900 mb-1">1. Introduction</h3>
+                <p>
+                  MediEase is the centralized healthcare information management system of the Starkey Hearing Foundation. By
+                  logging in, you agree to comply with the organization’s Data Privacy Policy, Information Security Policy, and
+                  Code of Conduct, as well as applicable laws and standards including the Data Privacy Act of 2012 and ISO/IEC
+                  27001:2022.
+                </p>
+              </section>
+
+              <section>
+                <h3 className="font-semibold text-gray-900 mb-1">2. Purpose</h3>
+                <p>
+                  These Terms protect the integrity, confidentiality, and availability of data within MediEase and ensure
+                  responsible and ethical system use.
+                </p>
+              </section>
+
+              <section>
+                <h3 className="font-semibold text-gray-900 mb-1">3. Authorized Use</h3>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>Access is limited to authorized staff with assigned credentials.</li>
+                  <li>Accounts are personal and non-transferable; you are accountable for actions under your username.</li>
+                  <li>Use is restricted to official purposes; logout after use and never leave active sessions unattended.</li>
+                  <li>Unauthorized access, misuse, alteration, or destruction of data may result in disciplinary/legal action.</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3 className="font-semibold text-gray-900 mb-1">4. Data Privacy and Confidentiality</h3>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>All patient, mission, and inventory data are confidential and protected by applicable laws.</li>
+                  <li>Do not disclose, copy, or distribute system data without explicit authorization.</li>
+                  <li>Collect/process personal data only for legitimate operational purposes.</li>
+                  <li>Report any suspected data breach immediately; never store data on unsecured devices or transmit unencrypted data.</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3 className="font-semibold text-gray-900 mb-1">5. Data Accuracy and Integrity</h3>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>Ensure information entered/updated is accurate, complete, and current.</li>
+                  <li>Falsifying or manipulating records is prohibited.</li>
+                  <li>All user actions are logged for accountability (audit trails).</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3 className="font-semibold text-gray-900 mb-1">6. Information Security and ISO Compliance</h3>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>Security controls include encryption, 2FA, firewalls, and role-based access control.</li>
+                  <li>Use only secure devices and networks; avoid unauthorized software; follow strong password practices.</li>
+                  <li>Access logs and changes are monitored and audited for compliance.</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3 className="font-semibold text-gray-900 mb-1">7. Intellectual Property</h3>
+                <p>
+                  MediEase software, design, and documentation are the property of the Starkey Hearing Foundation. Reverse
+                  engineering or redistribution is prohibited. Data in MediEase remains property of the organization and its
+                  beneficiaries.
+                </p>
+              </section>
+
+              <section>
+                <h3 className="font-semibold text-gray-900 mb-1">8. Monitoring and Audit</h3>
+                <p>
+                  System activities are monitored and audited for operational, security, and compliance purposes. The Foundation
+                  may review logs and act on policy violations.
+                </p>
+              </section>
+
+              <section>
+                <h3 className="font-semibold text-gray-900 mb-1">9. Liability and Disciplinary Action</h3>
+                <p>
+                  Non-compliance may result in account suspension, termination, or legal action. Report vulnerabilities
+                  immediately and do not attempt to exploit them.
+                </p>
+              </section>
+
+              <section>
+                <h3 className="font-semibold text-gray-900 mb-1">10. Availability and Maintenance</h3>
+                <p>
+                  The system may undergo scheduled maintenance and updates. Some functions may be temporarily restricted during
+                  these periods.
+                </p>
+              </section>
+
+              <section>
+                <h3 className="font-semibold text-gray-900 mb-1">11. Agreement</h3>
+                <p>
+                  By selecting “I Agree,” you confirm you are authorized, have read and understood these Terms, and agree to
+                  comply with all policies and laws governing system use.
+                </p>
+              </section>
             </div>
           </div>
-        </div>
-      )}
+
+          <div className="mt-4 flex items-start gap-2">
+            <Checkbox
+              id="acceptTermsConfirm"
+              checked={termsChecked}
+              onCheckedChange={(v) => setTermsChecked(Boolean(v))}
+              className="mt-1"
+            />
+            <Label htmlFor="acceptTermsConfirm" className="text-sm text-gray-700">
+              I have read and agree to the Terms and Conditions.
+            </Label>
+          </div>
+
+          <DialogFooter className="mt-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowTermsModal(false)
+                setTermsChecked(false)
+                setTermsScrolled(false)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                handleInputChange("acceptTerms", true)
+                setShowTermsModal(false)
+                setTermsChecked(false)
+                setTermsScrolled(false)
+              }}
+              disabled={!termsChecked || !termsScrolled}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              I Agree
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* REMOVE old custom Terms overlay if present */}
     </div>
   )
 }

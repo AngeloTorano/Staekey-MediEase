@@ -1,0 +1,118 @@
+  return (
+    <div className="p-6 bg-gray-50 min-h-screen">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          <Package className="h-6 w-6 text-primary" />
+          <h1 className="text-3xl font-bold tracking-tight">Inventory Management</h1>
+        </div>
+      </div>
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+        <KpiCard
+          title="Total Patients"
+          value={dashboardData.total_patients}
+          color="text-red-500"
+        />
+        <KpiCard
+          title="Total Aids Fitted"
+          value={dashboardData.total_aids_fitted}
+          color="text-blue-900"
+        />
+        <KpiCard
+          title="Phases Recorded"
+          value={dashboardData.patient_funnel.length}
+          color="text-gray-500"
+        />
+      </div>
+
+      {/* --- 2 Charts Above --- */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* 1. New Patients by Day (AreaChart) */}
+
+        <div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                    {/* 5. Common Hearing Loss Causes (Horizontal BarChart) */}
+        <ChartCard title="🦻 Common Causes">
+          <BarChart
+            data={dashboardData.common_causes}
+            layout="vertical"
+            margin={{ top: 5, right: 20, left: 30, bottom: 5 }}
+          >
+            <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+            <XAxis type="number" />
+            <YAxis
+              dataKey="cause"
+              type="category"
+              scale="band"
+              tick={{ fontSize: 10 }}
+              width={80}
+            />
+            <Tooltip />
+            <Bar dataKey="count" fill={THEME_COLORS.grey} />
+          </BarChart>
+        </ChartCard> {/* <-- This is the corrected line */}
+
+        {/* 6. Common Ear Issues (Treemap) */}
+        <ChartCard title="👂 Common Issues">
+          <Treemap
+            data={dashboardData.common_issues}
+            dataKey="count"
+            nameKey="issue_type"
+            ratio={4 / 3}
+            stroke="#fff"
+            fill="#8884d8"
+          >
+            {dashboardData.common_issues.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={OTHER_COLORS[index % OTHER_COLORS.length]} />
+            ))}
+            <Tooltip
+              formatter={(value: number, name: string) => [`${value} cases`, name]}
+            />
+          </Treemap>
+        </ChartCard>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                     <ChartCard title="👫 Gender Distribution">
+          <PieChart>
+            <Pie
+              data={dashboardData.demographics.gender}
+              dataKey="count"
+              nameKey="gender"
+              cx="50%"
+              cy="50%"
+              innerRadius={60}
+              outerRadius={100}
+              paddingAngle={3}
+              label
+            >
+              {dashboardData.demographics.gender.map((_, i) => (
+                <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />
+              ))}
+            </Pie>
+            <Tooltip />
+            <Legend />
+          </PieChart>
+        </ChartCard>
+
+        {/* 4. Age Distribution (Vertical BarChart) */}
+        <ChartCard title="📅 Age Distribution">
+          <BarChart data={dashboardData.demographics.age_distribution}>
+            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey="age_range" tick={{ fontSize: 10 }} />
+            <YAxis />
+            <Tooltip />
+            <Bar dataKey="count" fill={THEME_COLORS.darkBlue} />
+          </BarChart>
+        </ChartCard>
+          </div>
+        </div>
+        <div>
+                  {/* 2. Geographic Distribution (Integrated Map) */}
+        <ChartCard title="🗺️ Geographic Distribution" noResponsiveWrapper={true}>
+          <GeographicMapChart />
+        </ChartCard>
+        </div>
+
+      </div>
+    </div>
+  );
