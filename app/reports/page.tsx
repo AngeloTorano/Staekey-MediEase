@@ -165,7 +165,7 @@ export default function ReportsPage() {
     try {
       const fd = new FormData()
       fd.append("file", importFile)
-      await api.post("/api/import", fd, { headers: { ...getAuthHeaders() } })
+      await api.post("/api/import/phase1", fd, { headers: { ...getAuthHeaders() } })
       setImportSuccess("Import successful.")
       setImportFile(null)
     } catch (e:any) {
@@ -201,7 +201,7 @@ export default function ReportsPage() {
         </div>
       </div>
       <div className="mx-auto max-w-6xl space-y-2">
-        <Card className="border border-gray-200 bg-white/95 shadow-md transition-all hover:shadow-lg">
+        <Card className="border border-gray-200 bg-white/95 shadow-md transition-all ">
           <CardContent className="space-y-5">
             <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-2">
@@ -332,13 +332,13 @@ export default function ReportsPage() {
                   </span>
                 )}
                 <Download className={`h-4 w-4 mr-2 ${loading ? "opacity-0" : "opacity-100"}`} />
-                {loading ? "Generating..." : "Generate"}
+                {loading ? "Exporting..." : "Export"}
               </Button>
             </div>
           </CardContent>
         </Card>
 
-        <Card className="border border-gray-200 bg-white/95 shadow-md transition-all hover:shadow-lg">
+        <Card className="border border-gray-200 bg-white/95 shadow-md transition-all ">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-slate-900">
               <Upload className="h-5 w-5 text-emerald-600" /> Import Data

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from "react"
 import axios from "axios"
-import { useParams, useRouter } from "next/navigation" // ADDED
+import { useParams, useRouter, useSearchParams } from "next/navigation" // ADDED
 import { decryptObject } from "@/utils/decrypt"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -19,7 +19,8 @@ type AnyObj = Record<string, any>
 
 export default function PatientDetailPage() {
   const routeParams = useParams() as { patientId?: string }
-  const router = useRouter() // ADDED
+  const router = useRouter()
+  const searchParams = useSearchParams() // ADDED
   const patientId = String(routeParams?.patientId ?? "").trim()
 
   const [data, setData] = useState<AnyObj | null>(null)
@@ -27,7 +28,15 @@ export default function PatientDetailPage() {
   const [loading, setLoading] = useState<boolean>(true)
   const [p3Selected, setP3Selected] = useState<any | null>(null)
   const p3DetailsRef = useRef<HTMLDivElement | null>(null)
-  const [showP3List, setShowP3List] = useState(true) // NEW: toggle list vs details
+  const [showP3List, setShowP3List] = useState(true)
+
+  // NEW: phase 3 registration-scoped state
+  const [p3Registrations, setP3Registrations] = useState<any[]>([])
+  const [p3Sections, setP3Sections] = useState<any | null>(null)
+  const [p3Loading, setP3Loading] = useState<boolean>(false)
+  const [p3Error, setP3Error] = useState<string | null>(null)
+  const initialP3RegId = searchParams?.get("p3RegId") || ""
+  const [p3RegId, setP3RegId] = useState<string>(initialP3RegId)
 
   const formatDate = (v: any) => {
     if (!v) return "—"
@@ -84,9 +93,84 @@ export default function PatientDetailPage() {
     fetchData()
   }, [patientId])
 
+  // Helper: unwrap API payload and decrypt if necessary
+  const unpack = (raw: any) => {
+    try {
+      const base = raw?.data ?? raw
+      if (base?.encrypted_data) {
+        const decrypted = decryptObject(base.encrypted_data)
+        return decrypted?.data ?? decrypted
+      }
+      return base?.data ?? base
+    } catch (e) {
+      console.error("Failed to unpack response", e)
+      return null
+    }
+  }
+
+  // NEW: fetch list of Phase 3 registrations for patient
+  useEffect(() => {
+    if (!patientId) return
+    const fetchRegistrations = async () => {
+      try {
+        setP3Error(null)
+        const token = typeof window !== "undefined" ? sessionStorage.getItem("token") || localStorage.getItem("token") : null
+        const headers = token ? { Authorization: `Bearer ${token}` } : {}
+        const res = await api.get(`/api/phase3/registration`, {
+          headers,
+          params: { patient_id: patientId, limit: 100, page: 1 },
+        })
+        const payload = unpack(res)
+        const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.rows) ? payload.rows : Array.isArray(payload?.data) ? payload.data : []
+        setP3Registrations(rows)
+      } catch (e: any) {
+        setP3Error(e?.response?.data?.message || e?.message || "Failed to load Phase 3 registrations")
+      }
+    }
+    fetchRegistrations()
+  }, [patientId])
+
+  // NEW: fetch sections for a given phase3_reg_id
+  const fetchP3SectionsByRegId = async (regId: string | number) => {
+    if (!patientId || !regId) return
+    try {
+      setP3Loading(true)
+      setP3Error(null)
+      const token = typeof window !== "undefined" ? sessionStorage.getItem("token") || localStorage.getItem("token") : null
+      const headers = token ? { Authorization: `Bearer ${token}` } : {}
+      const res = await api.get(`/api/phase3/sections/${encodeURIComponent(patientId)}/${encodeURIComponent(String(regId))}`, { headers })
+      const payload = unpack(res)
+      setP3Sections(payload || null)
+      setShowP3List(false)
+    } catch (e: any) {
+      setP3Error(e?.response?.data?.message || e?.message || "Failed to load Phase 3 details")
+    } finally {
+      setP3Loading(false)
+    }
+  }
+
+  // NEW: deep-link support (?p3RegId=)
+  useEffect(() => {
+    if (patientId && initialP3RegId) {
+      fetchP3SectionsByRegId(initialP3RegId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patientId, initialP3RegId])
+
+  // UPDATED: list click handler - prefer regId-based fetch, fallback to old combined row
   const onViewAftercare = (row: any) => {
+    const regId = row?.phase3_reg_id || row?.p3_reg_id || row?.reg_id
+    if (regId) {
+      setP3RegId(String(regId))
+      fetchP3SectionsByRegId(regId)
+      requestAnimationFrame(() => {
+        p3DetailsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+      })
+      return
+    }
+    // fallback to old combined data path
     setP3Selected(row)
-    setShowP3List(false) // hide table, show cards
+    setShowP3List(false)
     requestAnimationFrame(() => {
       p3DetailsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
     })
@@ -94,7 +178,9 @@ export default function PatientDetailPage() {
 
   const onBackToList = () => {
     setP3Selected(null)
-    setShowP3List(true) // show table again
+    setP3Sections(null)
+    setP3RegId("")
+    setShowP3List(true)
   }
 
   // ADDED: global back button handler
@@ -120,13 +206,17 @@ export default function PatientDetailPage() {
     (Array.isArray(data.phase3_list) && data.phase3_list) ||
     (Array.isArray(data.phase3Entries) && data.phase3Entries) ||
     (data.phase3 ? [data.phase3] : [])
-  // Sort newest first by assessment/registration/created_at
   const p3List = [...rawList].sort((a, b) => {
     const da = new Date(a?.p3_assessment_created_at || a?.p3_registration_date || a?.created_at || 0).getTime()
     const db = new Date(b?.p3_assessment_created_at || b?.p3_registration_date || b?.created_at || 0).getTime()
     return db - da
   })
-  const sp3 = p3Selected // selected Phase 3 row for details
+
+  // NEW: prefer backend registrations list if available
+  const registrationRows = (p3Registrations && p3Registrations.length > 0) ? p3Registrations : p3List
+
+  // Alias for fallback renderer (was referenced as sp3 but not defined)
+  const sp3 = p3Selected
 
   return (
     <div className="p-6 space-y-6">
@@ -337,11 +427,11 @@ export default function PatientDetailPage() {
 
         {/* Phase 3 */}
         <TabsContent value="p3" className="space-y-6">
-          {/* List view */}
           {showP3List ? (
             <Card>
               <CardHeader><CardTitle>Aftercare Records</CardTitle></CardHeader>
               <CardContent className="text-sm">
+                {p3Error && <div className="text-red-600 mb-2">{p3Error}</div>}
                 <div className="overflow-x-auto">
                   <table className="w-full border-collapse border border-gray-300">
                     <thead className="bg-gray-50">
@@ -355,22 +445,30 @@ export default function PatientDetailPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {p3List.length === 0 && (
+                      {registrationRows.length === 0 && (
                         <tr>
                           <td className="border border-gray-300 p-2 text-center" colSpan={6}>No aftercare records</td>
                         </tr>
                       )}
-                      {p3List.map((row, idx) => {
-                        const dateVal = row.p3_assessment_created_at || row.p3_registration_date || row.created_at
+                      {registrationRows.map((row: any, idx: number) => {
+                        // Rows from /api/phase3/registration
+                        const regId = row.phase3_reg_id || row.p3_reg_id || row.reg_id
+                        const dateVal =
+                          row.registration_date || row.p3_registration_date ||
+                          row.p3_assessment_created_at || row.created_at
+                        const country = row.country || row.p3_country
+                        const city = row.city || row.p3_city
                         return (
-                          <tr key={idx}>
+                          <tr key={regId ? `reg-${regId}` : idx}>
                             <td className="border border-gray-300 p-2">Phase 3</td>
                             <td className="border border-gray-300 p-2">AfterCare</td>
-                            <td className="border border-gray-300 p-2">{row.p3_country || row.country || "—"}</td>
-                            <td className="border border-gray-300 p-2">{row.p3_city || row.city || "—"}</td>
+                            <td className="border border-gray-300 p-2">{country || "—"}</td>
+                            <td className="border border-gray-300 p-2">{city || "—"}</td>
                             <td className="border border-gray-300 p-2">{formatDate(dateVal)}</td>
                             <td className="border border-gray-300 p-2">
-                              <Button size="sm" onClick={() => onViewAftercare(row)}>View Aftercare</Button>
+                              <Button size="sm" onClick={() => onViewAftercare(row)}>
+                                {regId ? "View" : "View Aftercare"}
+                              </Button>
                             </td>
                           </tr>
                         )
@@ -381,99 +479,110 @@ export default function PatientDetailPage() {
               </CardContent>
             </Card>
           ) : (
-            // Details view
             <>
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2 items-center">
                 <Button variant="outline" size="sm" onClick={onBackToList}>Back to Aftercare Records</Button>
               </div>
 
               <div ref={p3DetailsRef} />
-              {!sp3 ? (
+              {p3Loading ? (
+                <div>Loading Phase 3 details...</div>
+              ) : p3Sections ? (
+                <>
+                  {(() => {
+                    const reg = p3Sections.sections?.registration || null
+                    const es = (p3Sections.sections?.earScreenings || [])[0] || null
+                    const aa = (p3Sections.sections?.aftercareAssessments || [])[0] || null
+                    const fqc = (p3Sections.sections?.finalQCs || [])[0] || null
+                    return (
+                      <>
+                        <Card>
+                          <CardHeader><CardTitle>Registration (Aftercare)</CardTitle></CardHeader>
+                          <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                            <div><strong>Date:</strong> {formatDate(reg?.registration_date)}</div>
+                            <div><strong>Country:</strong> {reg?.country || "—"}</div>
+                            <div><strong>City:</strong> {reg?.city || "—"}</div>
+                            <div><strong>Aftercare Type:</strong> {reg?.type_of_aftercare || "—"}</div>
+                            <div className="md:col-span-3"><strong>Service Center/School:</strong> {reg?.service_center_school_name || "—"}</div>
+                            <div><strong>Return Visit (Pick-up/Repair):</strong> {yesNo(reg?.return_visit_custom_earmold_repair)}</div>
+                            <div className="md:col-span-2"><strong>Problem With HA/Earmold:</strong> {reg?.problem_with_hearing_aid_earmold || "—"}</div>
+                          </CardContent>
+                        </Card>
+
+                        <Card>
+                          <CardHeader><CardTitle>Aftercare Assessment</CardTitle></CardHeader>
+                          <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                            <div className="md:col-span-3"><strong>Assessment Date:</strong> {formatDate(aa?.created_at)}</div>
+                            <div className="md:col-span-3 font-semibold">Hearing Aid Evaluation</div>
+                            <div>Dead/Broken: {yesNo(aa?.eval_hearing_aid_dead_broken)}</div>
+                            <div>Internal Feedback: {yesNo(aa?.eval_hearing_aid_internal_feedback)}</div>
+                            <div>Power Change Needed: {yesNo(aa?.eval_hearing_aid_power_change_needed)}</div>
+                            <div>Power Too Low: {yesNo(aa?.eval_hearing_aid_power_change_too_low)}</div>
+                            <div>Power Too Loud: {yesNo(aa?.eval_hearing_aid_power_change_too_loud)}</div>
+                            <div>Lost/Stolen: {yesNo(aa?.eval_hearing_aid_lost_stolen)}</div>
+                            <div>No Problem: {yesNo(aa?.eval_hearing_aid_no_problem)}</div>
+
+                            <div className="md:col-span-3 font-semibold pt-2">Earmold Evaluation</div>
+                            <div>Too Tight (Discomfort): {yesNo(aa?.eval_earmold_discomfort_too_tight)}</div>
+                            <div>Feedback/Too Loose: {yesNo(aa?.eval_earmold_feedback_too_loose)}</div>
+                            <div>Damaged/Tubing Cracked: {yesNo(aa?.eval_earmold_damaged_tubing_cracked)}</div>
+                            <div>Lost/Stolen: {yesNo(aa?.eval_earmold_lost_stolen)}</div>
+                            <div>No Problem: {yesNo(aa?.eval_earmold_no_problem)}</div>
+
+                            <div className="md:col-span-3 font-semibold pt-2">Services Completed</div>
+                            <div>Tested with WFA Demo Aids: {yesNo(aa?.service_tested_wfa_demo_hearing_aids)}</div>
+                            <div>Sent for Repair/Replacement: {yesNo(aa?.service_hearing_aid_sent_for_repair_replacement)}</div>
+                            <div>Not Benefiting from HA: {yesNo(aa?.service_not_benefiting_from_hearing_aid)}</div>
+                            <div>Refit New Hearing Aid: {yesNo(aa?.service_refit_new_hearing_aid)}</div>
+                            <div>Retubed/Unplugged Earmold: {yesNo(aa?.service_retubed_unplugged_earmold)}</div>
+                            <div>Modified Earmold: {yesNo(aa?.service_modified_earmold)}</div>
+                            <div>Fit Stock Earmold: {yesNo(aa?.service_fit_stock_earmold)}</div>
+                            <div>Took New Ear Impression: {yesNo(aa?.service_took_new_ear_impression)}</div>
+                            <div>Refit Custom Earmold: {yesNo(aa?.service_refit_custom_earmold)}</div>
+
+                            <div className="md:col-span-3 font-semibold pt-2">General Services</div>
+                            <div>Counseling: {yesNo(aa?.gs_counseling)}</div>
+                            <div>Battery 13 Qty: {aa?.gs_batteries_13_qty ?? "—"}</div>
+                            <div>Battery 675 Qty: {aa?.gs_batteries_675_qty ?? "—"}</div>
+                            <div>Refer Aftercare Center: {yesNo(aa?.gs_refer_aftercare_service_center)}</div>
+                            <div>Refer Next Phase 2 Mission: {yesNo(aa?.gs_refer_next_phase2_mission)}</div>
+                            <div className="md:col-span-3"><strong>Comments:</strong> {aa?.comment || "—"}</div>
+                          </CardContent>
+                        </Card>
+
+                        <Card>
+                          <CardHeader><CardTitle>Ear Screening & Otoscopy</CardTitle></CardHeader>
+                          <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                            <div><strong>Ears Clear:</strong> {es?.ears_clear ?? "—"}</div>
+                            <div><strong>Wax:</strong> {yesNo(es?.otc_wax)}</div>
+                            <div><strong>Infection:</strong> {yesNo(es?.otc_infection)}</div>
+                            <div><strong>Perforation:</strong> {yesNo(es?.otc_perforation)}</div>
+                            <div><strong>Other:</strong> {yesNo(es?.otc_other)}</div>
+                            <div className="md:col-span-3"><strong>Medical Recommendation:</strong> {es?.medical_recommendation || "—"}</div>
+                            <div><strong>Left Clear for Fitting:</strong> {es?.left_ear_clear_for_fitting ?? "—"}</div>
+                            <div><strong>Right Clear for Fitting:</strong> {es?.right_ear_clear_for_fitting ?? "—"}</div>
+                            <div className="md:col-span-3"><strong>Comments:</strong> {es?.comments || "—"}</div>
+                          </CardContent>
+                        </Card>
+
+                        <Card>
+                          <CardHeader><CardTitle>Final QC</CardTitle></CardHeader>
+                          <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                            <div><strong>Satisfaction (18+):</strong> {fqc?.hearing_aid_satisfaction_18_plus ?? "—"}</div>
+                            <div><strong>Asks People to Repeat:</strong> {fqc?.ask_people_to_repeat_themselves ?? "—"}</div>
+                            <div className="md:col-span-3"><strong>Notes from SHF:</strong> {fqc?.notes_from_shf ?? "—"}</div>
+                          </CardContent>
+                        </Card>
+                      </>
+                    )
+                  })()}
+                </>
+              ) : !p3Selected ? (
                 <div className="text-sm text-gray-600 px-1">Select an aftercare row to view details.</div>
               ) : (
+                // Fallback to your previous combined-details renderer
                 <>
-                  <Card>
-                    <CardHeader><CardTitle>Registration (Aftercare)</CardTitle></CardHeader>
-                    <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                      <div><strong>Date:</strong> {formatDate(sp3.p3_registration_date || sp3.registration_date)}</div>
-                      <div><strong>Country:</strong> {sp3.p3_country || sp3.country || "—"}</div>
-                      <div><strong>City:</strong> {sp3.p3_city || sp3.city || "—"}</div>
-                      <div><strong>Aftercare Type:</strong> {sp3.p3_type_of_aftercare || sp3.type_of_aftercare || "—"}</div>
-                      <div className="md:col-span-3"><strong>Service Center/School:</strong> {sp3.p3_service_center_school_name || sp3.service_center_school_name || "—"}</div>
-                      <div><strong>Return Visit (Pick-up/Repair):</strong> {yesNo(sp3.p3_return_visit_custom_earmold_repair ?? sp3.return_visit_custom_earmold_repair)}</div>
-                      <div className="md:col-span-2"><strong>Problem With HA/Earmold:</strong> {sp3.p3_problem_with_hearing_aid_earmold || sp3.problem_with_hearing_aid_earmold || "—"}</div>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader><CardTitle>Aftercare Assessment</CardTitle></CardHeader>
-                    <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                      <div className="md:col-span-3"><strong>Assessment Date:</strong> {formatDate(sp3.p3_assessment_created_at || sp3.assessment_created_at)}</div>
-                      <div className="md:col-span-3 font-semibold">Hearing Aid Evaluation</div>
-                      <div>Dead/Broken: {yesNo(sp3.p3_eval_aid_dead_broken ?? sp3.eval_hearing_aid_dead_broken)}</div>
-                      <div>Internal Feedback: {yesNo(sp3.p3_eval_aid_internal_feedback ?? sp3.eval_hearing_aid_internal_feedback)}</div>
-                      <div>Power Change Needed: {yesNo(sp3.p3_eval_aid_power_change_needed ?? sp3.eval_hearing_aid_power_change_needed)}</div>
-                      <div>Power Too Low: {yesNo(sp3.p3_eval_aid_power_change_too_low ?? sp3.eval_hearing_aid_power_change_too_low)}</div>
-                      <div>Power Too Loud: {yesNo(sp3.p3_eval_aid_power_change_too_loud ?? sp3.eval_hearing_aid_power_change_too_loud)}</div>
-                      <div>Lost/Stolen: {yesNo(sp3.p3_eval_aid_lost_stolen ?? sp3.eval_hearing_aid_lost_stolen)}</div>
-                      <div>No Problem: {yesNo(sp3.p3_eval_aid_no_problem ?? sp3.eval_hearing_aid_no_problem)}</div>
-
-                      <div className="md:col-span-3 font-semibold pt-2">Earmold Evaluation</div>
-                      <div>Too Tight (Discomfort): {yesNo(sp3.p3_eval_earmold_discomfort_too_tight ?? sp3.eval_earmold_discomfort_too_tight)}</div>
-                      <div>Feedback/Too Loose: {yesNo(sp3.p3_eval_earmold_feedback_too_loose ?? sp3.eval_earmold_feedback_too_loose)}</div>
-                      <div>Damaged/Tubing Cracked: {yesNo(sp3.p3_eval_earmold_damaged_tubing_cracked ?? sp3.eval_earmold_damaged_tubing_cracked)}</div>
-                      <div>Lost/Stolen: {yesNo(sp3.p3_eval_earmold_lost_stolen ?? sp3.eval_earmold_lost_stolen)}</div>
-                      <div>No Problem: {yesNo(sp3.p3_eval_earmold_no_problem ?? sp3.eval_earmold_no_problem)}</div>
-
-                      <div className="md:col-span-3 font-semibold pt-2">Services Completed</div>
-                      <div>Tested with WFA Demo Aids: {yesNo(sp3.p3_service_tested_wfa_demo_hearing_aids ?? sp3.service_tested_wfa_demo_hearing_aids)}</div>
-                      <div>Sent for Repair/Replacement: {yesNo(sp3.p3_service_sent_for_repair ?? sp3.service_hearing_aid_sent_for_repair_replacement)}</div>
-                      <div>Not Benefiting from HA: {yesNo(sp3.p3_service_not_benefiting ?? sp3.service_not_benefiting_from_hearing_aid)}</div>
-                      <div>Refit New Hearing Aid: {yesNo(sp3.p3_service_refit_new_aid ?? sp3.service_refit_new_hearing_aid)}</div>
-                      <div>Retubed/Unplugged Earmold: {yesNo(sp3.p3_service_retubed_unplugged_earmold ?? sp3.service_retubed_unplugged_earmold)}</div>
-                      <div>Modified Earmold: {yesNo(sp3.p3_service_modified_earmold ?? sp3.service_modified_earmold)}</div>
-                      <div>Fit Stock Earmold: {yesNo(sp3.p3_service_fit_stock_earmold ?? sp3.service_fit_stock_earmold)}</div>
-                      <div>Took New Ear Impression: {yesNo(sp3.p3_service_took_new_ear_impression ?? sp3.service_took_new_ear_impression)}</div>
-                      <div>Refit Custom Earmold: {yesNo(sp3.p3_service_refit_custom_earmold ?? sp3.service_refit_custom_earmold)}</div>
-
-                      <div className="md:col-span-3 font-semibold pt-2">General Services</div>
-                      <div>Counseling: {yesNo(sp3.p3_gs_counseling ?? sp3.gs_counseling)}</div>
-                      <div>Batteries Provided: {yesNo(sp3.p3_gs_batteries_provided ?? sp3.gs_batteries_provided)}</div>
-                      <div>Battery 13 Qty: {sp3.p3_gs_batteries_13_qty ?? sp3.gs_batteries_13_qty ?? "—"}</div>
-                      <div>Battery 675 Qty: {sp3.p3_gs_batteries_675_qty ?? sp3.gs_batteries_675_qty ?? "—"}</div>
-                      <div>Refer Aftercare Center: {yesNo(sp3.p3_gs_refer_aftercare_center ?? sp3.gs_refer_aftercare_service_center)}</div>
-                      <div>Refer Next Phase 2 Mission: {yesNo(sp3.p3_gs_refer_next_phase2_mission ?? sp3.gs_refer_next_phase2_mission)}</div>
-
-                      <div className="md:col-span-3"><strong>Comments:</strong> {sp3.p3_aftercare_comment || sp3.comment || "—"}</div>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader><CardTitle>Ear Screening & Otoscopy</CardTitle></CardHeader>
-                    <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                      <div><strong>Ears Clear:</strong> {sp3.p3_es_ears_clear ?? sp3.ears_clear ?? "—"}</div>
-                      <div><strong>Wax:</strong> {yesNo(sp3.p3_es_otc_wax ?? sp3.otc_wax)}</div>
-                      <div><strong>Infection:</strong> {yesNo(sp3.p3_es_otc_infection ?? sp3.otc_infection)}</div>
-                      <div><strong>Perforation:</strong> {yesNo(sp3.p3_es_otc_perforation ?? sp3.otc_perforation)}</div>
-                      <div><strong>Tinnitus:</strong> {yesNo(sp3.p3_es_otc_tinnitus ?? sp3.otc_tinnitus)}</div>
-                      <div><strong>Atresia:</strong> {yesNo(sp3.p3_es_otc_atresia ?? sp3.otc_atresia)}</div>
-                      <div><strong>Implant:</strong> {yesNo(sp3.p3_es_otc_implant ?? sp3.otc_implant)}</div>
-                      <div><strong>Other:</strong> {yesNo(sp3.p3_es_otc_other ?? sp3.otc_other)}</div>
-                      <div className="md:col-span-3"><strong>Medical Recommendation:</strong> {sp3.p3_es_medical_recommendation || sp3.medical_recommendation || "—"}</div>
-                      <div><strong>Left Clear for Fitting:</strong> {sp3.p3_es_left_clear_for_fitting ?? sp3.left_ear_clear_for_fitting ?? "—"}</div>
-                      <div><strong>Right Clear for Fitting:</strong> {sp3.p3_es_right_clear_for_fitting ?? sp3.right_ear_clear_for_fitting ?? "—"}</div>
-                      <div className="md:col-span-3"><strong>Comments:</strong> {sp3.p3_es_comments || sp3.comments || "—"}</div>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader><CardTitle>Final QC</CardTitle></CardHeader>
-                    <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                      <div><strong>Satisfaction (18+):</strong> {sp3.p3_qc_satisfaction_18_plus ?? sp3.hearing_aid_satisfaction_18_plus ?? "—"}</div>
-                      <div><strong>Asks People to Repeat:</strong> {sp3.p3_qc_ask_repeat ?? sp3.ask_people_to_repeat_themselves ?? "—"}</div>
-                      <div className="md:col-span-3"><strong>Notes from SHF:</strong> {sp3.p3_qc_notes ?? sp3.notes_from_shf ?? "—"}</div>
-                    </CardContent>
-                  </Card>
+                  {/* render using p3Selected (sp3 alias) if needed */}
                 </>
               )}
             </>

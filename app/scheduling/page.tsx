@@ -20,6 +20,21 @@ import { ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, Edit, Trash 
 import { RoleGuard } from "@/components/role-guard"
 import { decryptObject } from "@/utils/decrypt"
 
+const MONTHS: string[] = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+]
+
 // API instance (adjust baseURL as needed)
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL,
@@ -30,8 +45,8 @@ type Mission = {
   id: number
   title: string
   type: string
-  date: string // normalized YYYY-MM-DD
-  time?: string // normalized HH:mm
+  date: string
+  time?: string
   city?: string
   location?: string
   coordinator?: string
@@ -40,29 +55,57 @@ type Mission = {
   description?: string
 }
 
+// Normalize values that may arrive as "123" into 123
+const toNum = (v: any): number => {
+  const n = Number(v)
+  return Number.isNaN(n) ? 0 : n
+}
+
 // helper: pad
 const pad = (n: number) => String(n).padStart(2, "0")
 
-// NEW: Month labels for the month filter
-const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
+// NEW: Robust time parser (handles HH:mm, HH:mm:ss, HH:mm:ssZ, HH:mm:ss.sss)
+const parseTime = (input?: string | null): string | undefined => {
+  if (!input) return undefined
+  const m = String(input).match(/(\d{1,2}):(\d{2})/)
+  if (!m) return undefined
+  const hh = pad(Number(m[1]))
+  const mm = pad(Number(m[2]))
+  return `${hh}:${mm}`
+}
 
-// normalize incoming date/time strings into { date: 'YYYY-MM-DD', time: 'HH:mm'? }
+// normalize incoming date/time strings into { date: 'YYYY-MM-DD', time?: 'HH:mm' }
 const normalizeDateTime = (input?: string | null) => {
   if (!input) return { date: "" }
-  // If input already looks like YYYY-MM-DD
+
+  // Date only (avoid deriving time=00:00)
   if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return { date: input }
+
+  // Time only
+  if (/^\d{1,2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?$/.test(input)) {
+    const t = parseTime(input)
+    return { date: "", time: t }
+  }
+
   try {
+    // Detect if input includes time portion to decide whether to keep time
+    const hasTime = /T\d{1,2}:\d{2}|\s\d{1,2}:\d{2}/.test(input)
     const d = new Date(input)
     if (isNaN(d.getTime())) {
       // fallback: try to extract date part if present
       const m = input.match(/(\d{4}-\d{2}-\d{2})/)
-      if (m) return { date: m[1] }
+      if (m) {
+        // if we also see a time, try to parse it
+        const t = parseTime(input)
+        return t ? { date: m[1], time: t } : { date: m[1] }
+      }
       return { date: "" }
     }
     const y = d.getFullYear()
     const mth = pad(d.getMonth() + 1)
     const day = pad(d.getDate())
     const date = `${y}-${mth}-${day}`
+    if (!hasTime) return { date } // do not fabricate 00:00
     const hours = pad(d.getHours())
     const mins = pad(d.getMinutes())
     const time = `${hours}:${mins}`
@@ -214,18 +257,16 @@ export default function SchedulingPage() {
         // Map backend schedule shape to Mission type used by UI
         const mapped: Mission[] = schedulesData.map((s: any) => {
           const rawDate = s.date || s.scheduled_at || s.datetime || s.created_at
-          const { date, time } = normalizeDateTime(rawDate)
+          const parts = normalizeDateTime(rawDate)
+          const timeFromSeparate = parseTime(s.time || s.scheduled_time)
           return {
-            id: s.schedule_id || s.id,
+            id: toNum(s.schedule_id ?? s.id),
             title: s.mission_name || s.title || `Mission ${s.schedule_id || s.id}`,
             type: s.type || (s.mission_name && s.mission_name.split(" - ")[0]) || "Phase",
-            date: date,
-            time: time || (s.time ? normalizeDateTime(s.time).time : undefined),
-
-            // --- FIX 1: Read lowercase 'aftercarecity' from DB ---
+            date: parts.date,
+            // Prefer explicit time field, else any time embedded in date string
+            time: timeFromSeparate || parts.time,
             city: s.AfterCareCity || s.aftercarecity,
-            // --- END FIX 1 ---
-
             location: s.location,
             coordinator: s.coordinator,
             status: s.status || "Pending",
@@ -401,13 +442,14 @@ export default function SchedulingPage() {
         created = Array.isArray(decrypted) ? decrypted[0] : decrypted
       }
 
-      const dt = normalizeDateTime(created.date || payload.date)
+      const parts = normalizeDateTime(created.date || payload.date)
       const mapped: Mission = {
-        id: created.schedule_id || created.id,
+        id: toNum(created.schedule_id ?? created.id),
         title: created.mission_name || created.title || newMission.title || "",
         type: created.type || (created.mission_name && created.mission_name.split(" - ")[0]) || (newMission.type || "Phase"),
-        date: dt.date,
-        time: dt.time || (created.time ? normalizeDateTime(created.time).time : (newMission.time || undefined)),
+        date: parts.date,
+        // Prefer backend time, else any time embedded in date, else form time
+        time: parseTime(created.time) ?? parts.time ?? (newMission.time || undefined),
 
         // --- FIX 2: Read 'aftercarecity' and fallback to 'city' or form state ---
         city: created.AfterCareCity || created.aftercarecity || created.city || newMission.city,
@@ -451,29 +493,30 @@ export default function SchedulingPage() {
 
       let updated: any = res.data.data
       if (res.data.encrypted_data) {
-        updated = decryptObject(res.data.encrypted_data)
+        const dec = decryptObject(res.data.encrypted_data)
+        // handle array or wrapped shapes
+        updated = Array.isArray(dec) ? dec[0] : (dec?.data ?? dec)
       }
 
-      const dt = normalizeDateTime(updated.date || payload.date || updateData.date)
+      const parts = normalizeDateTime(updated?.date ?? payload.date ?? updateData.date)
       const mapped: Mission = {
-        id: updated.schedule_id || updated.id || id,
-        title: updated.mission_name || updated.title || updateData.title || "",
-        type: updated.type || (updated.mission_name && updated.mission_name.split(" - ")[0]) || (updateData.type || "Phase"),
-        date: dt.date,
-        time: dt.time || (updated.time ? normalizeDateTime(updated.time).time : updateData.time),
-
-        // --- FIX 3: Read 'aftercarecity' and fallback to 'city' or form state ---
-        city: updated.AfterCareCity || updated.aftercarecity || updated.city || updateData.city,
-        // --- END FIX 3 ---
-
-        location: updated.location || updateData.location,
-        coordinator: updated.coordinator || updateData.coordinator,
-        status: updated.status || updateData.status,
-        participants: updated.participants || updateData.participants || 0,
-        description: updated.description || updateData.description,
+        id: toNum(updated?.schedule_id ?? updated?.id ?? id),
+        title: updated?.mission_name || updated?.title || updateData.title || "",
+        type: updated?.type || (updated?.mission_name && updated.mission_name.split(" - ")[0]) || (updateData.type || "Phase"),
+        date: parts.date,
+        // Prefer backend time, else payload, else any time embedded, else prior value
+        time: parseTime(updated?.time) ?? parseTime(payload.time) ?? parts.time ?? updateData.time,
+        city: updated?.AfterCareCity || updated?.aftercarecity || updated?.city || updateData.city,
+        location: updated?.location || updateData.location,
+        coordinator: updated?.coordinator || updateData.coordinator,
+        status: updated?.status || updateData.status,
+        participants: updated?.participants || updateData.participants || 0,
+        description: updated?.description || updateData.description,
       }
 
-      setMissions((prev) => prev.map((m) => (m.id === mapped.id ? mapped : m)))
+      setMissions((prev) =>
+        prev.map((m) => (toNum(m.id) === toNum(mapped.id) ? mapped : m))
+      )
       setEditingMission(null)
     } catch (err: any) {
       console.error("Update schedule error:", err)
@@ -492,7 +535,7 @@ export default function SchedulingPage() {
       await api.delete(`/api/schedules/${id}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       })
-      setMissions((prev) => prev.filter((m) => m.id !== id))
+      setMissions((prev) => prev.filter((m) => toNum(m.id) !== toNum(id))) // numeric compare
       setEditingMission(null)
       setDeleteTarget(null)
     } catch (err: any) {
@@ -844,12 +887,11 @@ export default function SchedulingPage() {
         {/* FILTERS + BUTTONS - RIGHT SIDE */}
         <aside className="col-span-3 order-2 space-y-6">
           <Card>
-            <CardHeader><CardTitle>Filter</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               {/* SINGLE MONTH FILTER */}
               <div className="space-y-1">
-                <Label className="block text-sm font-medium">Filters</Label>
-                <div className="flex gap-2">
+                <Label>Filter</Label>
+                <div className="flex">
                   {/* STATUS FILTER */}
                   <div className="flex-1">
                     <Select
@@ -1088,7 +1130,7 @@ export default function SchedulingPage() {
                 <Input
                   id="new-time"
                   type="time"
-                  value={newMission.time || ""}
+                  value={newMission.time}
                   onChange={(e) =>
                     setNewMission({ ...newMission, time: e.target.value })
                   }
@@ -1258,7 +1300,7 @@ export default function SchedulingPage() {
           }
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent size="4xl">
           <DialogHeader><DialogTitle>Sent Messages</DialogTitle></DialogHeader>
           {sentLoading && <p className="text-sm text-muted-foreground">Loading...</p>}
           {sentError && <p className="text-sm text-red-500">{sentError}</p>}

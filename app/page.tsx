@@ -100,6 +100,14 @@ export default function StarkeySystemLoginPage() {
   const [otpVerifying, setOtpVerifying] = useState(false) // ADDED
   // ADD: control dialog visibility
   const [isOtpDialogOpen, setIsOtpDialogOpen] = useState(false)
+  // ADD Forgot password states
+  const [forgotOpen, setForgotOpen] = useState(false)
+  const [forgotStage, setForgotStage] = useState<"init"|"otp"|"reset"|"done">("init")
+  const [forgotUsername, setForgotUsername] = useState("")
+  const [forgotOtp, setForgotOtp] = useState("")
+  const [forgotNewPassword, setForgotNewPassword] = useState("")
+  const [forgotLoading, setForgotLoading] = useState(false)
+  const [forgotMsg, setForgotMsg] = useState("")
   const router = useRouter()
 
   const validateForm = useCallback((): boolean => {
@@ -180,6 +188,11 @@ export default function StarkeySystemLoginPage() {
       setRememberMe(true)
     }
   }, [])
+function maskPhone(phone: string | undefined) {
+  if (!phone) return "your phone";
+  // Example: 09708710682 → 0970***0682
+  return phone.replace(/(\d{3})\d{6}(\d{2})/, "$1****$2");
+}
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -234,27 +247,15 @@ export default function StarkeySystemLoginPage() {
 
       if (res.status !== 200) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
 
-      const { token, user } = res.data.data
-      if (!token || !user) throw new Error("Invalid authentication response from server")
-
-      // Ensure phone exists
-      if (!user.phone_number) {
-        throw new Error("No phone number on file. Please contact admin.")
+      const { otp_required, user } = res.data.data
+      if (otp_required) {
+        setPendingUser(user)
+        setOtpStep(true)
+        setIsOtpDialogOpen(true)
+        setErrors((prev) => ({ ...prev, general: "" }))
+      } else {
+        throw new Error("OTP flow expected but not indicated.")
       }
-
-      // Save pending, do NOT persist token yet
-      setPendingToken(token)
-      setPendingUser(user)
-
-      // Send OTP
-      setOtpSending(true)
-      await api.post("/api/sms/send-otp", {
-        user_id: user.user_id || user.id,
-        phone_number: user.phone_number,
-      })
-      setOtpStep(true) // Show OTP step
-      setIsOtpDialogOpen(true) // OPEN DIALOG
-      setErrors((prev) => ({ ...prev, general: "OTP sent. Please enter the code to continue." }))
     } catch (err: any) {
       if (axios.isCancel(err)) {
         setErrors((prev) => ({ ...prev, general: "Request timed out. Please try again." }))
@@ -265,14 +266,13 @@ export default function StarkeySystemLoginPage() {
         }))
       }
     } finally {
-      setOtpSending(false)
       setLoading(false)
     }
   }
 
-  // ADDED: Verify OTP, then persist token and proceed
+  // ADAPT verify OTP to new endpoint issuing token
   const handleVerifyOtp = async () => {
-    if (!pendingUser || !pendingToken) {
+    if (!pendingUser) {
       setErrors((prev) => ({ ...prev, general: "No pending session. Please login again." }))
       return
     }
@@ -283,15 +283,17 @@ export default function StarkeySystemLoginPage() {
     setOtpVerifying(true)
     setErrors((prev) => ({ ...prev, general: "" }))
     try {
-      const res = await api.post("/api/sms/verify-otp", {
-        user_id: pendingUser.user_id || pendingUser.id,
+      const res = await api.post("/api/auth/verify-otp", {
+        user_id: pendingUser.user_id,
         otp_code: otpCode.trim(),
       })
       if (res.status === 200) {
-        // Now persist token and user, then redirect
-        secureStorage.setItem("token", pendingToken)
-        secureStorage.setItem("user", JSON.stringify(pendingUser))
-        secureStorage.setItem("userRole", Array.isArray(pendingUser.roles) ? pendingUser.roles[0] : pendingUser.roles)
+        const { token, user } = res.data.data
+        secureStorage.setItem("token", token)
+        secureStorage.setItem("user", JSON.stringify(user))
+        secureStorage.setItem("userRole", Array.isArray(user.roles) ? user.roles[0] : user.roles)
+        secureStorage.setItem("userFirstName", user.first_name)
+        secureStorage.setItem("userLastName", user.last_name)
 
         rememberMe
           ? secureStorage.setItem("rememberedUser", loginForm.username.trim())
@@ -301,9 +303,8 @@ export default function StarkeySystemLoginPage() {
         secureStorage.removeItem("lastLoginAttempt")
         secureStorage.removeItem("lockTime")
         setLoginAttempts(0)
-        router.push("/dashboard")
-        // CLOSE OTP dialog after success
         setIsOtpDialogOpen(false)
+        router.push("/dashboard")
       } else {
         throw new Error("Invalid server response.")
       }
@@ -331,6 +332,55 @@ export default function StarkeySystemLoginPage() {
       setErrors((prev) => ({ ...prev, general: err?.response?.data?.message || "Failed to resend OTP." }))
     } finally {
       setOtpSending(false)
+    }
+  }
+
+  // Forgot password handlers
+  const startForgot = async () => {
+    setForgotMsg("")
+    if (!forgotUsername.trim()) {
+      setForgotMsg("Enter username first.")
+      return
+    }
+    setForgotLoading(true)
+    try {
+      const res = await api.post("/api/auth/forgot-password/init", { username: forgotUsername.trim() })
+      if (res.status === 200) {
+        setForgotStage("otp")
+        setForgotMsg("OTP sent. Enter it to continue.")
+      } else {
+        setForgotMsg("Failed to send OTP.")
+      }
+    } catch (e:any) {
+      setForgotMsg(e?.response?.data?.message || "Error sending OTP.")
+    } finally {
+      setForgotLoading(false)
+    }
+  }
+
+  const resetForgot = async () => {
+    setForgotMsg("")
+    if (!forgotOtp.trim() || !forgotNewPassword.trim()) {
+      setForgotMsg("OTP and new password required.")
+      return
+    }
+    setForgotLoading(true)
+    try {
+      const res = await api.post("/api/auth/forgot-password/reset", {
+        username: forgotUsername.trim(),
+        otp_code: forgotOtp.trim(),
+        new_password: forgotNewPassword.trim()
+      })
+      if (res.status === 200) {
+        setForgotStage("done")
+        setForgotMsg("Password reset. Please login.")
+      } else {
+        setForgotMsg("Reset failed.")
+      }
+    } catch (e:any) {
+      setForgotMsg(e?.response?.data?.message || "Reset error.")
+    } finally {
+      setForgotLoading(false)
     }
   }
 
@@ -455,6 +505,14 @@ export default function StarkeySystemLoginPage() {
                     variant="link"
                     className="text-sm text-blue-600 hover:text-blue-800 p-0 h-auto"
                     disabled={loading || isLocked}
+                    onClick={() => {
+                      setForgotOpen(true)
+                      setForgotStage("init")
+                      setForgotMsg("")
+                      setForgotOtp("")
+                      setForgotNewPassword("")
+                      setForgotUsername(loginForm.username) // prefill
+                    }}
                   >
                     Forgot password?
                   </Button>
@@ -505,7 +563,7 @@ export default function StarkeySystemLoginPage() {
                 <Button
                   type="submit"
                   className="w-full h-11 text-base font-medium bg-gradient-to-r from-blue-700 to-blue-500 hover:from-blue-800 hover:to-blue-600 transition-all duration-200"
-                  disabled={loading || isLocked || otpStep} // keep disabled while OTP is pending
+                  disabled={loading || isLocked} // removed otpStep disable while OTP is disabled
                 >
                   {loading ? (
                     <>
@@ -561,10 +619,11 @@ export default function StarkeySystemLoginPage() {
           </DialogHeader>
 
           <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Enter the 6-digit code sent to{" "}
-              <strong>{pendingUser?.phone_number || "your phone"}</strong>.
-            </p>
+<p className="text-sm text-muted-foreground">
+  Enter the 6-digit code sent to{" "}
+  <strong>{maskPhone(pendingUser?.phone_number )}</strong>.
+</p>
+
 
             <div className="space-y-1">
               <Label htmlFor="otp">OTP Code</Label>
@@ -799,7 +858,51 @@ export default function StarkeySystemLoginPage() {
         </DialogContent>
       </Dialog>
 
-      {/* REMOVE old custom Terms overlay if present */}
+      {/* Forgot Password Dialog */}
+      <Dialog open={forgotOpen} onOpenChange={(o) => { setForgotOpen(o); if (!o) { setForgotStage("init"); setForgotMsg(""); }}}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Forgot Password</DialogTitle>
+          </DialogHeader>
+          {forgotStage === "init" && (
+            <div className="space-y-3">
+              <Label htmlFor="fp-username">Username</Label>
+              <Input id="fp-username" value={forgotUsername} onChange={e=>setForgotUsername(e.target.value)} />
+              {forgotMsg && <p className="text-sm text-blue-600">{forgotMsg}</p>}
+              <DialogFooter>
+                <Button variant="outline" onClick={()=>setForgotOpen(false)}>Cancel</Button>
+                <Button onClick={startForgot} disabled={forgotLoading}>
+                  {forgotLoading ? "Sending..." : "Send OTP"}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+          {forgotStage === "otp" && (
+            <div className="space-y-3">
+              <p className="text-sm">OTP sent to registered phone.</p>
+              <Label htmlFor="fp-otp">OTP Code</Label>
+              <Input id="fp-otp" value={forgotOtp} onChange={e=>setForgotOtp(e.target.value)} />
+              <Label htmlFor="fp-new-pass">New Password</Label>
+              <Input id="fp-new-pass" type="password" value={forgotNewPassword} onChange={e=>setForgotNewPassword(e.target.value)} />
+              {forgotMsg && <p className="text-sm text-blue-600">{forgotMsg}</p>}
+              <DialogFooter>
+                <Button variant="outline" onClick={()=>setForgotOpen(false)}>Cancel</Button>
+                <Button onClick={resetForgot} disabled={forgotLoading}>
+                  {forgotLoading ? "Resetting..." : "Reset Password"}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+          {forgotStage === "done" && (
+            <div className="space-y-3">
+              <p className="text-sm text-green-600">{forgotMsg}</p>
+              <DialogFooter>
+                <Button onClick={()=>{ setForgotOpen(false) }}>Close</Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { decryptObject } from "@/utils/decrypt"
-import { Search, Plus, Edit, Eye, User } from "lucide-react"
+import { Search, Plus, Edit, Eye, ArchiveIcon } from "lucide-react"
 import { Users } from "lucide-react"
 import { useRouter } from "next/navigation"
 
@@ -49,6 +49,26 @@ const INITIAL_PATIENT_STATE = {
   is_student: false,
 }
 
+// Pagination hook (mirrors admin)
+function usePagination(defaultLimit = 25) {
+  const [page, setPage] = useState(1)
+  const [limit, setLimit] = useState(defaultLimit)
+  const [total, setTotal] = useState(0)
+  const totalPages = Math.max(1, Math.ceil(Math.max(total, 1) / limit))
+
+  const handlePageChange = (newPage: number) => {
+    const clamped = Math.max(1, newPage)
+    setPage(clamped)
+    return clamped
+  }
+  const handleLimitChange = (newLimit: number) => {
+    setLimit(newLimit)
+    setPage(1)
+    return { newLimit, newPage: 1 }
+  }
+  return { page, limit, total, totalPages, setTotal, handlePageChange, handleLimitChange }
+}
+
 export default function PatientsPage() {
   const [patients, setPatients] = useState<any[]>([])
   const [searchTerm, setSearchTerm] = useState("")
@@ -65,51 +85,73 @@ export default function PatientsPage() {
   const [error, setError] = useState<string | null>(null)
   const router = useRouter()
 
+  const {
+    page,
+    limit,
+    total,
+    setTotal,
+    handlePageChange,
+    handleLimitChange
+  } = usePagination(25)
+
   const formatDate = (value: any) => {
     if (!value) return "—"
     const d = new Date(value)
     return isNaN(d.getTime()) ? String(value) : d.toLocaleDateString()
   }
 
-  // Fetch patients from backend
+  // Fetch patients from backend (now paginated + server search)
   useEffect(() => {
     const fetchPatients = async () => {
       setLoading(true)
       try {
         const token = sessionStorage.getItem("token") || localStorage.getItem("token")
+        const params: any = { page, limit }
+        if (searchTerm.trim()) params.search = searchTerm.trim()
         const res = await api.get("/api/patients", {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
+          params
         })
-        let patientsData = []
+
+        let patientsData: any[] = []
         if (res.data.encrypted_data) {
           try {
             const decrypted = decryptObject(res.data.encrypted_data)
-            console.log("Decrypted patients:", decrypted)
-            if (Array.isArray(decrypted)) {
-              patientsData = decrypted
-            } else if (decrypted && Array.isArray(decrypted.patients)) {
-              patientsData = decrypted.patients
-            } else if (decrypted && decrypted.data && Array.isArray(decrypted.data)) {
-              patientsData = decrypted.data
-            } else {
-              patientsData = []
-            }
-          } catch (e) {
+            if (Array.isArray(decrypted)) patientsData = decrypted
+            else if (Array.isArray(decrypted?.patients)) patientsData = decrypted.patients
+            else if (Array.isArray(decrypted?.data)) patientsData = decrypted.data
+          } catch {
             setError("Failed to decrypt patient data")
-            patientsData = []
           }
-        } else if (res.data.data) {
+        } else if (Array.isArray(res.data?.data)) {
           patientsData = res.data.data
+        } else if (Array.isArray(res.data)) {
+          patientsData = res.data
         }
+
         setPatients(patientsData || [])
-      } catch (err) {
+
+        // Try to read total; fallback approximate (current loaded span)
+        const rawTotal =
+          res.data?.total ||
+          res.data?.count ||
+          res.data?.meta?.total ||
+          res.data?.meta?.count
+
+        if (typeof rawTotal === "number") {
+          setTotal(rawTotal)
+        } else {
+          // Approximation (will grow as user pages). Replace with backend total later.
+            setTotal((page - 1) * limit + patientsData.length)
+        }
+      } catch {
         setError("Failed to load patients")
       } finally {
         setLoading(false)
       }
     }
     fetchPatients()
-  }, [])
+  }, [page, limit, searchTerm])
 
   // Dirty form detection
   const isFormDirty = () => {
@@ -158,40 +200,27 @@ export default function PatientsPage() {
     }
   }
 
-  // Filter patients (keep gender/search and add date range filter for Date Added)
+  // Adjust client-side filters (gender/date only on current page)
   const filteredPatients = patients.filter((patient) => {
     if (!patient) return false
-
-    const matchesSearch =
-      (patient?.last_name?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
-      (patient?.gender?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
-      (patient?.first_name?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
-      (patient?.shf_id?.toLowerCase() || "").includes(searchTerm.toLowerCase())
-
     const matchesGender = filterGender === "All Genders" || patient?.gender === filterGender
-
-    // Date range filter on patient.date_added / created_at / createdAt
     const dateValue = patient?.date_added || patient?.created_at || patient?.createdAt || null
     let withinDateRange = true
     if (filterStartDate || filterEndDate) {
       const d = dateValue ? new Date(dateValue) : null
-      if (!d || isNaN(d.getTime())) {
-        withinDateRange = false
-      } else {
+      if (!d || isNaN(d.getTime())) withinDateRange = false
+      else {
         if (filterStartDate) {
-          const start = new Date(filterStartDate)
-          start.setHours(0, 0, 0, 0)
+          const start = new Date(filterStartDate); start.setHours(0,0,0,0)
           if (d < start) withinDateRange = false
         }
         if (filterEndDate) {
-          const end = new Date(filterEndDate)
-          end.setHours(23, 59, 59, 999)
+          const end = new Date(filterEndDate); end.setHours(23,59,59,999)
           if (d > end) withinDateRange = false
         }
       }
     }
-
-    return matchesSearch && matchesGender && withinDateRange
+    return matchesGender && withinDateRange
   })
 
   // Add patient handler
@@ -252,6 +281,98 @@ export default function PatientsPage() {
       setLoading(false)
     }
   }
+
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [editingPatient, setEditingPatient] = useState<any | null>(null)
+  const [editLoading, setEditLoading] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+
+  const openEditDialog = (patient: any) => {
+    setEditingPatient({
+      patient_id: patient.patient_id,
+      first_name: patient.first_name || "",
+      last_name: patient.last_name || "",
+      gender: patient.gender || "",
+      date_of_birth: patient.date_of_birth ? String(patient.date_of_birth).split("T")[0] : "",
+      age: patient.age || "",
+      mobile_number: patient.mobile_number || "",
+      region_district: patient.region_district || "",
+      city_village: patient.city_village || "",
+      status: patient.status || "",
+      date_of_death: patient.date_of_death ? String(patient.date_of_death).split("T")[0] : "",
+      last_active_date: patient.last_active_date ? String(patient.last_active_date).split("T")[0] : "",
+    })
+    setEditError(null)
+    setEditDialogOpen(true)
+  }
+
+  const handleEditChange = (field: string, value: any) => {
+    setEditingPatient((p: any) => ({ ...p, [field]: value }))
+  }
+
+  const submitPatientEdit = async () => {
+    if (!editingPatient) return
+    setEditLoading(true)
+    setEditError(null)
+    try {
+      const token = sessionStorage.getItem("token") || localStorage.getItem("token")
+      const headers = token ? { Authorization: `Bearer ${token}` } : {}
+      const payload: any = {
+        first_name: editingPatient.first_name,
+        last_name: editingPatient.last_name,
+        gender: editingPatient.gender,
+        date_of_birth: editingPatient.date_of_birth || null,
+        age: editingPatient.age ? Number(editingPatient.age) : null,
+        mobile_number: editingPatient.mobile_number || null,
+        region_district: editingPatient.region_district || null,
+        city_village: editingPatient.city_village || null,
+        status: editingPatient.status || null,
+        date_of_death: editingPatient.date_of_death || null,
+        last_active_date: editingPatient.last_active_date || null,
+      }
+      Object.keys(payload).forEach((k) => (payload[k] === "" || payload[k] === null) && delete payload[k])
+      const res = await api.put(`/api/patients/${editingPatient.patient_id}`, payload, { headers })
+      // update local list
+      setPatients((prev) => prev.map((p) => (p.patient_id === editingPatient.patient_id ? res.data.data : p)))
+      setEditDialogOpen(false)
+    } catch (err: any) {
+      setEditError(err?.response?.data?.error || err?.message || "Failed to update patient")
+    } finally {
+      setEditLoading(false)
+    }
+  }
+
+  const [archivingId, setArchivingId] = useState<number | null>(null)
+
+  // NEW: archive dialogs state
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false)
+  const [archiveTarget, setArchiveTarget] = useState<any | null>(null)
+  const [archiveResultOpen, setArchiveResultOpen] = useState(false)
+  const [archiveResultMsg, setArchiveResultMsg] = useState("")
+
+  // REPLACED: no window.confirm/alert — use dialogs instead
+  const archivePatient = async (patientId: number) => {
+    setArchivingId(patientId)
+    try {
+      const token = sessionStorage.getItem("token") || localStorage.getItem("token")
+      const headers = token ? { Authorization: `Bearer ${token}` } : {}
+      const res = await api.post(`/api/archival/${patientId}/archive`, null, { headers })
+      setPatients((prev) => prev.filter((p) => p.patient_id !== patientId))
+      const archiveId = res.data?.data?.archive_id || res.data?.archive_id || "OK"
+      setArchiveResultMsg(`Patient archived successfully (archive_id=${archiveId}).`)
+    } catch (err: any) {
+      setArchiveResultMsg(err?.response?.data?.error || err?.message || "Archive failed")
+    } finally {
+      setArchivingId(null)
+      setArchiveConfirmOpen(false)
+      setArchiveTarget(null)
+      setArchiveResultOpen(true)
+    }
+  }
+
+  const pageStartItem = total === 0 ? 0 : (page - 1) * limit + 1
+  const pageEndItem = Math.min((page - 1) * limit + filteredPatients.length, total)
+  const totalPages = Math.max(1, Math.ceil(Math.max(total, 1) / limit))
 
   return (
     <div className="space-y-6 p-6">
@@ -321,323 +442,150 @@ export default function PatientsPage() {
 
       {/* Patient List */}
       <Card>
-        <CardHeader className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-
-            <CardTitle>Patient Records ({filteredPatients.length})</CardTitle>
-            <CardDescription>Manage patient information and medical records</CardDescription>
-          </div>
-          <div>
-            <Dialog open={showAddPatient} onOpenChange={handleDialogOpenChange}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add New Patient
+        <CardHeader>
+          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+            <div>
+              <CardTitle>Patient Records ({total})</CardTitle>
+              <CardDescription>Manage patient information and medical records</CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="text-sm text-muted-foreground">
+                {total === 0 ? "No results" : `Showing ${pageStartItem}–${pageEndItem} of ${total}`}
+              </div>
+              <div className="flex items-center space-x-2">
+                <label htmlFor="patientsPageSize" className="text-sm text-muted-foreground">Rows</label>
+                <select
+                  id="patientsPageSize"
+                  className="h-9 rounded-md border border-input bg-background px-2 text-sm focus:outline-none"
+                  value={limit}
+                  onChange={(e) => handleLimitChange(Number(e.target.value))}
+                >
+                  {[10,25,50,100].map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center space-x-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={loading || page === 1}
+                  onClick={() => handlePageChange(page - 1)}
+                >
+                  Prev
                 </Button>
-              </DialogTrigger>
-              <DialogContent size="3xl" className="max-h-[85vh] overflow-y-auto">
-                <DialogHeader className="px-6 pt-6 pb-4 border-b">
-                  <DialogTitle className="text-2xl">Register New Patient</DialogTitle>
-                  <DialogDescription className="text-sm">
-                    Enter patient demographic information
-                  </DialogDescription>
-                </DialogHeader>
-                <form onSubmit={handleAddPatient} className="space-y-4 p-6">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="last_name">Last Name *</Label>
-                      <Input
-                        id="last_name"
-                        value={newPatient.last_name}
-                        onChange={(e) => setNewPatient((prev) => ({ ...prev, last_name: e.target.value }))}
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="first_name">First Name *</Label>
-                      <Input
-                        id="first_name"
-                        value={newPatient.first_name}
-                        onChange={(e) => setNewPatient((prev) => ({ ...prev, first_name: e.target.value }))}
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="gender">Gender *</Label>
-                      <Select
-                        value={newPatient.gender}
-                        onValueChange={(value) => setNewPatient((prev) => ({ ...prev, gender: value }))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select gender" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="Male">Male</SelectItem>
-                          <SelectItem value="Female">Female</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="date_of_birth">Date of Birth *</Label>
-                      <Input
-                        id="date_of_birth"
-                        type="date"
-                        value={newPatient.date_of_birth}
-                        onChange={(e) => setNewPatient((prev) => ({ ...prev, date_of_birth: e.target.value }))}
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="age">Age</Label>
-                      <Input
-                        id="age"
-                        type="number"
-                        value={newPatient.age}
-                        onChange={(e) => setNewPatient((prev) => ({ ...prev, age: e.target.value }))}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="mobile_number">Mobile Number</Label>
-                      <Input
-                        id="mobile_number"
-                        value={newPatient.mobile_number}
-                        onChange={(e) => setNewPatient((prev) => ({ ...prev, mobile_number: e.target.value }))}
-                        placeholder="+63912345678"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="alternative_number">Alternative Number</Label>
-                      <Input
-                        id="alternative_number"
-                        value={newPatient.alternative_number}
-                        onChange={(e) => setNewPatient((prev) => ({ ...prev, alternative_number: e.target.value }))}
-                        placeholder="+63923456789"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="region_district">Region/District</Label>
-                      <select
-                        id="region_district"
-                        value={newPatient.region_district}
-                        onChange={(e) =>
-                          setNewPatient((prev) => ({ ...prev, region_district: e.target.value }))
-                        }
-                        className="w-full p-2 border rounded-md"
-                      >
-                        <option value="">Select Region</option>
-                        <option value="National Capital Region (NCR)">National Capital Region (NCR)</option>
-                        <option value="Cordillera Administrative Region (CAR)">Cordillera Administrative Region (CAR)</option>
-                        <option value="Ilocos Region (Region I)">Ilocos Region (Region I)</option>
-                        <option value="Cagayan Valley (Region II)">Cagayan Valley (Region II)</option>
-                        <option value="Central Luzon (Region III)">Central Luzon (Region III)</option>
-                        <option value="CALABARZON (Region IV-A)">CALABARZON (Region IV-A)</option>
-                        <option value="MIMAROPA (Region IV-B)">MIMAROPA (Region IV-B)</option>
-                        <option value="Bicol Region (Region V)">Bicol Region (Region V)</option>
-                        <option value="Western Visayas (Region VI)">Western Visayas (Region VI)</option>
-                        <option value="Central Visayas (Region VII)">Central Visayas (Region VII)</option>
-                        <option value="Eastern Visayas (Region VIII)">Eastern Visayas (Region VIII)</option>
-                        <option value="Zamboanga Peninsula (Region IX)">Zamboanga Peninsula (Region IX)</option>
-                        <option value="Northern Mindanao (Region X)">Northern Mindanao (Region X)</option>
-                        <option value="Davao Region (Region XI)">Davao Region (Region XI)</option>
-                        <option value="SOCCSKSARGEN (Region XII)">SOCCSKSARGEN (Region XII)</option>
-                        <option value="Caraga (Region XIII)">Caraga (Region XIII)</option>
-                        <option value="Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)">
-                          Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)
-                        </option>
-                      </select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="city_village">City/Village</Label>
-                      <Input
-                        id="city_village"
-                        value={newPatient.city_village}
-                        onChange={(e) => setNewPatient((prev) => ({ ...prev, city_village: e.target.value }))}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Employment Status Section */}
-                  <div className="space-y-4 pt-2">
-                    <h3 className="text-lg font-medium">Employment & Education</h3>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="employment_status">Employment Status</Label>
-                        <Select
-                          value={newPatient.employment_status}
-                          onValueChange={(value) => setNewPatient((prev) => ({ ...prev, employment_status: value }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select employment status" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Employed">Employed</SelectItem>
-                            <SelectItem value="Self Employed">Self Employed</SelectItem>
-                            <SelectItem value="Not Employed">Not Employed</SelectItem>
-                            <SelectItem value="Student">Student</SelectItem>
-                            <SelectItem value="Retired">Retired</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="highest_education_level">Highest Education Level</Label>
-                        <Select
-                          value={newPatient.highest_education_level}
-                          onValueChange={(value) => setNewPatient((prev) => ({ ...prev, highest_education_level: value }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select education level" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="None">None</SelectItem>
-                            <SelectItem value="Primary">Primary</SelectItem>
-                            <SelectItem value="Secondary">Secondary</SelectItem>
-                            <SelectItem value="Post Secondary">Post Secondary</SelectItem>
-                            <SelectItem value="University">University</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-
-                    {/* Student Information Section */}
-                    <div className="border rounded-lg p-4 space-y-4">
-                      <div className="flex items-center space-x-2">
-                        <Checkbox
-                          id="is_student"
-                          checked={newPatient.is_student}
-                          onCheckedChange={(checked) => setNewPatient((prev) => ({ ...prev, is_student: !!checked }))}
-                        />
-                        <Label htmlFor="is_student" className="text-base font-medium">Current Student</Label>
-                      </div>
-
-                      {newPatient.is_student && (
-                        <div className="grid grid-cols-2 gap-4 pt-2">
-                          <div className="space-y-2">
-                            <Label htmlFor="school_name">School Name *</Label>
-                            <Input
-                              id="school_name"
-                              value={newPatient.school_name}
-                              onChange={(e) => setNewPatient((prev) => ({ ...prev, school_name: e.target.value }))}
-                              required={newPatient.is_student}
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label htmlFor="school_phone_number">School Phone Number</Label>
-                            <Input
-                              id="school_phone_number"
-                              value={newPatient.school_phone_number}
-                              onChange={(e) => setNewPatient((prev) => ({ ...prev, school_phone_number: e.target.value }))}
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {error && <div className="text-red-500">{error}</div>}
-
-                  <div className="flex justify-end space-x-2 pt-4">
-                    <Button type="button" variant="outline" onClick={handleAttemptClose}>
-                      Cancel
-                    </Button>
-                    <Button type="submit" disabled={loading}>
-                      {loading ? "Registering..." : "Register Patient"}
-                    </Button>
-                  </div>
-                </form>
-              </DialogContent>
-            </Dialog>
+                <span className="px-2 text-sm">
+                  Page {page} / {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={loading || page === totalPages}
+                  onClick={() => handlePageChange(page + 1)}
+                >
+                  Next
+                </Button>
+              </div>
+              <div>
+                <Button onClick={() => router.push("/forms/phase1")}>
+                  <Plus className="h-4 w-4 mr-2" /> Add New Patient
+                </Button>
+              </div>
+            </div>
           </div>
-
         </CardHeader>
 
         <CardContent>
-          {loading ? (
-            <div>Loading...</div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>SHF ID</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Gender</TableHead>
-                  <TableHead>Age</TableHead>
-                  <TableHead>Location</TableHead>
-                  <TableHead>Contact</TableHead>
-                  <TableHead>Date Added</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredPatients.map((patient) => {
-                  if (!patient) return null
+          {loading ? <div>Loading...</div> : (
+            <>
+              <Table>
+                {/* ...existing code (table headers & rows) ... */}
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>SHF ID</TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Gender</TableHead>
+                    <TableHead>Age</TableHead>
+                    <TableHead>Location</TableHead>
+                    <TableHead>Contact</TableHead>
+                    <TableHead>Date Added</TableHead>
+                    <TableHead>Archive</TableHead>
+                    <TableHead>Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredPatients.map((patient) => {
+                    if (!patient) return null
 
-                  const isStudent = !!patient.school_name
-
-                  return (
-                    <TableRow key={patient.patient_id}>
-                      {/* SHF ID */}
-                      <TableCell>
-                        {patient.shf_id ? (
-                          <Badge variant="secondary">{patient.shf_id}</Badge>
-                        ) : (
-                          <Badge variant="outline">Pending</Badge>
-                        )}
-                      </TableCell>
-                      {/* Name */}
-                      <TableCell className="font-medium">
-                        {patient.last_name}, {patient.first_name}
-                      </TableCell>
-                      {/* Gender */}
-                      <TableCell>{patient.gender}</TableCell>
-                      {/* Age */}
-                      <TableCell>{patient.age}</TableCell>
-                      {/* Location */}
-                      <TableCell>
-                        <div className="text-sm">
-                          <div>{patient.city_village}</div>
-                          <div className="text-muted-foreground">{patient.region_district}</div>
-                        </div>
-                      </TableCell>
-                      {/* Contact */}
-                      <TableCell>
-                        <div>{patient.mobile_number}</div>
-                        {patient.alternative_number && (
-                          <div className="text-muted-foreground">{patient.alternative_number}</div>
-                        )}
-                      </TableCell>
-                      {/* Date Added */}
-                      <TableCell>{formatDate(patient.date_added || patient.created_at || patient.createdAt)}</TableCell>
-                      {/* Actions */}
-                      <TableCell>
-                        <div className="flex space-x-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => router.push(`/patients/${patient.patient_id}`)}
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="sm">
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
+                    const isStudent = !!patient.school_name
+ 
+                    return (
+                      <TableRow key={patient.patient_id}>
+                        {/* SHF ID */}
+                        <TableCell>
+                          {patient.shf_id ? (
+                            <Badge variant="secondary">{patient.shf_id}</Badge>
+                          ) : (
+                            <Badge variant="outline">Pending</Badge>
+                          )}
+                        </TableCell>
+                        {/* Name */}
+                        <TableCell className="font-medium">
+                          {patient.last_name}, {patient.first_name}
+                        </TableCell>
+                        {/* Gender */}
+                        <TableCell>{patient.gender}</TableCell>
+                        {/* Age */}
+                        <TableCell>{patient.age}</TableCell>
+                        {/* Location */}
+                        <TableCell>
+                          <div className="text-sm">
+                            <div>{patient.city_village}</div>
+                            <div className="text-muted-foreground">{patient.region_district}</div>
+                          </div>
+                        </TableCell>
+                        {/* Contact */}
+                        <TableCell>
+                          <div>{patient.mobile_number}</div>
+                          {patient.alternative_number && (
+                            <div className="text-muted-foreground">{patient.alternative_number}</div>
+                          )}
+                        </TableCell>
+                        {/* Date Added */}
+                        <TableCell>{formatDate(patient.date_added || patient.created_at || patient.createdAt)}</TableCell>
+                        {/* Archive */}
+                        <TableCell>
+                          <div className="flex space-x-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              aria-label={`Archive patient ${patient.patient_id}`}
+                              onClick={() => { setArchiveTarget(patient); setArchiveConfirmOpen(true) }}
+                              disabled={archivingId === patient.patient_id}
+                            >
+                              <ArchiveIcon className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                        {/* Actions */}
+                        <TableCell>
+                          <div className="flex space-x-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => router.push(`/patients/${patient.patient_id}`)}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={() => openEditDialog(patient)}>
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </>
           )}
         </CardContent>
       </Card>
@@ -672,6 +620,78 @@ export default function PatientsPage() {
               <Button onClick={handleConfirmSubmit} disabled={loading}>
                 {loading ? "Registering..." : "Confirm & Submit"}
               </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Patient Dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit Patient</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {editError && <div className="text-red-600">{editError}</div>}
+            <div className="grid grid-cols-2 gap-4">
+              <Input value={editingPatient?.first_name || ""} onChange={(e) => handleEditChange("first_name", e.target.value)} />
+              <Input value={editingPatient?.last_name || ""} onChange={(e) => handleEditChange("last_name", e.target.value)} />
+              <Input value={editingPatient?.mobile_number || ""} onChange={(e) => handleEditChange("mobile_number", e.target.value)} />
+              <Input type="date" value={editingPatient?.date_of_birth || ""} onChange={(e) => handleEditChange("date_of_birth", e.target.value)} />
+              <Input value={editingPatient?.region_district || ""} onChange={(e) => handleEditChange("region_district", e.target.value)} />
+              <Input value={editingPatient?.city_village || ""} onChange={(e) => handleEditChange("city_village", e.target.value)} />
+              <Select value={editingPatient?.gender || ""} onValueChange={(v) => handleEditChange("gender", v)}>
+                <SelectTrigger><SelectValue placeholder="Gender" /></SelectTrigger>
+                <SelectContent><SelectItem value="Male">Male</SelectItem><SelectItem value="Female">Female</SelectItem></SelectContent>
+              </Select>
+              <Input type="date" value={editingPatient?.date_of_death || ""} onChange={(e) => handleEditChange("date_of_death", e.target.value)} />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setEditDialogOpen(false)}>Cancel</Button>
+              <Button onClick={submitPatientEdit} disabled={editLoading}>{editLoading ? "Saving..." : "Save"}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Archive Confirmation Dialog */}
+      <Dialog open={archiveConfirmOpen} onOpenChange={(v) => { if (!archivingId) setArchiveConfirmOpen(v) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Archive this patient?</DialogTitle>
+            <DialogDescription>This will move the patient to the archive. You can restore them later.</DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            {archiveTarget && (
+              <div className="mb-4 text-sm">
+                <div><span className="font-medium">Name: </span>{archiveTarget.last_name}, {archiveTarget.first_name}</div>
+                <div><span className="font-medium">SHF ID: </span>{archiveTarget.shf_id || "Pending"}</div>
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setArchiveConfirmOpen(false)} disabled={!!archivingId}>Cancel</Button>
+              <Button
+                variant="destructive"
+                onClick={() => archiveTarget && archivePatient(archiveTarget.patient_id)}
+                disabled={!!archivingId || !archiveTarget}
+              >
+                {archivingId === archiveTarget?.patient_id ? "Archiving..." : "Archive"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Archive Result Dialog */}
+      <Dialog open={archiveResultOpen} onOpenChange={setArchiveResultOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Archive status</DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <p className="mb-4">{archiveResultMsg}</p>
+            <div className="flex justify-end">
+              <Button onClick={() => setArchiveResultOpen(false)}>Close</Button>
             </div>
           </div>
         </DialogContent>

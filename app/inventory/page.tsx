@@ -1,6 +1,6 @@
 "use client"
 
-import type React from "react"
+import  React from "react"
 import { useState, useEffect } from "react"
 import axios from "axios"
 import { Button } from "@/components/ui/button"
@@ -20,8 +20,9 @@ import {
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import { Search, Plus, Edit, AlertTriangle, Package, TrendingUp, TrendingDown, FileText } from "lucide-react"
+import { Search, Plus, Edit, AlertTriangle, Package, Loader2, FileText } from "lucide-react"
 import { decryptObject } from "@/utils/decrypt" // <-- decrypt helper
+import { useReactToPrint } from "react-to-print"
 
 // API instance
 const api = axios.create({
@@ -43,8 +44,7 @@ export default function InventoryPage() {
   const [searchTerm, setSearchTerm] = useState("")
   const [filterType, setFilterType] = useState("All Types")
   const [filterStock, setFilterStock] = useState("All Stocks")
-  const [filterLocation, setFilterLocation] = useState("All Status")
-  const [filterStatus, setFilterStatus] = useState("All Status")
+  const [filterStatus, setFilterStatus] = useState("All Status") // removed filterLocation
 
   const [showAddSupply, setShowAddSupply] = useState(false)
   const [showAddTransaction, setShowAddTransaction] = useState(false)
@@ -65,13 +65,11 @@ export default function InventoryPage() {
 
   const [newSupply, setNewSupply] = useState({
     item_name: "",
-    item_type: "",
     description: "",
     current_stock: "",
     min_stock_level: "",
     unit_of_measure: "",
-    location: "",
-    category_id: "",
+    category_id: "none",
   })
 
   const [newTransaction, setNewTransaction] = useState({
@@ -82,6 +80,27 @@ export default function InventoryPage() {
     comments: "",
   })
 
+  // Usage dialog state
+  const [usageOpen, setUsageOpen] = useState(false)
+  const [usageSupply, setUsageSupply] = useState<any>(null)
+  const [usageQty, setUsageQty] = useState("")
+  const [usagePatientId, setUsagePatientId] = useState("")
+  const [usagePhaseId, setUsagePhaseId] = useState("")
+  const [usageEvent, setUsageEvent] = useState("")
+
+  // Print reference
+  const printRef = React.useRef<HTMLDivElement | null>(null)
+  const [isPrinting, setIsPrinting] = useState(false)
+
+  // EDIT dialog state
+  const [editOpen, setEditOpen] = useState(false)
+  const [editData, setEditData] = useState({
+    item_name: "",
+    unit_of_measure: "",
+    reorder_level: "",
+    category_id: "none",
+  })
+
   // Fetch supplies + meta
   const fetchSupplies = async () => {
     setLoading(true)
@@ -89,7 +108,7 @@ export default function InventoryPage() {
       const token = typeof window !== "undefined" ? sessionStorage.getItem("token") || localStorage.getItem("token") : null
       const res = await api.get("/api/supplies", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
-        params: { limit: 1000 }, // get enough rows for client-side filtering
+        params: { limit: 1000 },
       })
 
       let payload: any = null
@@ -99,11 +118,18 @@ export default function InventoryPage() {
         payload = res.data?.data ?? res.data
       }
 
-      // backend returns array of supplies
-      setSupplies(Array.isArray(payload) ? payload : payload || [])
+      const normalizeSupplies = (raw: any): any[] => {
+        if (Array.isArray(raw)) return raw
+        if (raw?.supplies && Array.isArray(raw.supplies)) return raw.supplies
+        if (raw?.rows && Array.isArray(raw.rows)) return raw.rows
+        return []
+      }
+
+      setSupplies(normalizeSupplies(payload))
     } catch (err) {
       console.error("fetchSupplies error:", err)
       setError("Failed to load supplies")
+      setSupplies([])
     } finally {
       setLoading(false)
     }
@@ -158,37 +184,61 @@ export default function InventoryPage() {
     setLoading(true)
     setError(null)
     try {
-      const token = typeof window !== "undefined" ? sessionStorage.getItem("token") || localStorage.getItem("token") : null
-      const payload: any = {
-        item_name: newSupply.item_name,
-        category_id: newSupply.category_id || undefined,
-        description: newSupply.description || undefined,
-        current_stock_level: newSupply.current_stock ? Number(newSupply.current_stock) : 0,
-        reorder_level: newSupply.min_stock_level ? Number(newSupply.min_stock_level) : 0,
-        unit_of_measure: newSupply.unit_of_measure || undefined,
-        location: newSupply.location || undefined,
+      const token =
+        typeof window !== "undefined"
+          ? sessionStorage.getItem("token") || localStorage.getItem("token")
+          : null
+
+      // Normalize numbers
+      const current = Number(newSupply.current_stock)
+      const reorder = Number(newSupply.min_stock_level)
+
+      if (Number.isNaN(current) || Number.isNaN(reorder)) {
+        setError("Current stock and min stock level must be numbers")
+        setLoading(false)
+        return
       }
-      // remove undefined
+
+      const payload: any = {
+        item_name: newSupply.item_name.trim(),
+        unit_of_measure: newSupply.unit_of_measure.trim(),
+        current_stock_level: current,
+        reorder_level: reorder,
+        description: newSupply.description.trim() || undefined,
+        category_id: newSupply.category_id === "none" ? undefined : Number(newSupply.category_id),
+        // Provide initial_stock_level if backend expects it
+        initial_stock_level: current,
+      }
+
       Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k])
 
-      const res = await api.post("/api/supplies", payload, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      const returned = res.data?.encrypted_data ? decryptObject(res.data.encrypted_data) : res.data?.data ?? res.data
-      // Add returned supply
+      const res = await api.post("/api/supplies", payload, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+
+      const returned =
+        res.data?.encrypted_data
+          ? decryptObject(res.data.encrypted_data)
+          : res.data?.data ?? res.data
+
       setSupplies((prev) => [returned, ...prev])
       setShowAddSupply(false)
       setNewSupply({
         item_name: "",
-        item_type: "",
         description: "",
         current_stock: "",
         min_stock_level: "",
         unit_of_measure: "",
-        location: "",
-        category_id: "",
+        category_id: "none",
       })
     } catch (err: any) {
-      console.error("Add supply failed:", err)
-      setError(err?.response?.data?.message || "Failed to add supply")
+      console.error("Add supply failed full response:", err?.response?.data)
+      const serverErrors = err?.response?.data?.error
+      if (Array.isArray(serverErrors) && serverErrors.length) {
+        setError(serverErrors.map((e: any) => e.message || String(e)).join(", "))
+      } else {
+        setError(err?.response?.data?.message || "Failed to add supply")
+      }
     } finally {
       setLoading(false)
     }
@@ -265,31 +315,136 @@ export default function InventoryPage() {
     }
   }
 
+  // Usage submit handler
+  const submitUsage = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    if (!usageSupply) return
+    const qty = Number(usageQty)
+    if (!qty || qty <= 0) {
+      setError("Enter a positive quantity")
+      return
+    }
+    try {
+      const token = typeof window !== "undefined" ? sessionStorage.getItem("token") || localStorage.getItem("token") : null
+      await api.put(
+        `/api/supplies/${usageSupply.supply_id}/stock`,
+        {
+          quantity: -Math.abs(qty),
+          transaction_type: "Used",
+          notes: usageEvent ? `Usage: ${usageEvent}` : undefined,
+          patient_id: usagePatientId ? Number(usagePatientId) : undefined,
+          phase_id: usagePhaseId ? Number(usagePhaseId) : undefined,
+          related_event_type: usageEvent || undefined,
+        },
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+      )
+      setUsageOpen(false)
+      setUsageSupply(null)
+      setUsageQty("")
+      setUsagePatientId("")
+      setUsagePhaseId("")
+      setUsageEvent("")
+      await fetchSupplies()
+      if (selectedSupply) loadSupplyTransactions(selectedSupply.supply_id)
+    } catch (err: any) {
+      console.error("Usage failed:", err)
+      setError(err?.response?.data?.message || "Usage failed")
+    }
+  }
+
+  // Open edit for a row
+  const openEdit = (supply: any) => {
+    setSelectedSupply(supply)
+    setEditData({
+      item_name: supply.item_name || "",
+      unit_of_measure: supply.unit_of_measure || "",
+      reorder_level: String(supply.reorder_level ?? supply.min_stock_level ?? ""),
+      category_id: supply.category_id ? String(supply.category_id) : "none",
+    })
+    setEditOpen(true)
+  }
+
+  // Submit edit
+  const handleUpdateSupply = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedSupply) return
+    setLoading(true)
+    setError(null)
+    try {
+      const token = typeof window !== "undefined" ? sessionStorage.getItem("token") || localStorage.getItem("token") : null
+
+      const payload: any = {
+        item_name: editData.item_name.trim(),
+        unit_of_measure: editData.unit_of_measure.trim(),
+        reorder_level: Number(editData.reorder_level),
+      }
+      if (editData.category_id !== "none") payload.category_id = Number(editData.category_id)
+
+      if (!payload.item_name || !payload.unit_of_measure || Number.isNaN(payload.reorder_level)) {
+        setError("Name, Unit, and Reorder Level are required")
+        setLoading(false)
+        return
+      }
+
+      const res = await api.put(`/api/supplies/${selectedSupply.supply_id}`, payload, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      const updated = res.data?.encrypted_data ? decryptObject(res.data.encrypted_data) : res.data?.data ?? res.data
+
+      // Update local list immediately
+      setSupplies((prev) => prev.map((s) => (s.supply_id === selectedSupply.supply_id ? { ...s, ...updated } : s)))
+
+      setEditOpen(false)
+    } catch (err: any) {
+      console.error("Update supply failed:", err?.response?.data || err)
+      setError(err?.response?.data?.message || "Failed to update supply")
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // Filtered supplies client-side UI
-  const filteredSupplies = supplies.filter((supply) => {
+  const safeSupplies = Array.isArray(supplies) ? supplies : []
+
+  // Build unique, non-empty option lists with stable keys
+  const typeOptions = Array.from(
+    new Set([
+      ...categories.map((c: any) => c?.category_name).filter(Boolean),
+      ...safeSupplies.map((s: any) => s?.category_name || s?.item_type).filter(Boolean),
+    ])
+  )
+  // REMOVED: locationOptions
+
+  const filteredSupplies = safeSupplies.filter((supply) => {
     const matchesSearch =
       (supply.item_name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
       (supply.description || "").toLowerCase().includes(searchTerm.toLowerCase())
-
     const matchesType = filterType === "All Types" || (supply.category_name || supply.item_type) === filterType
-    const matchesLocation = filterLocation === "All Status" || (supply.location || "") === filterLocation
-
-    // stock/status filtering
     const current = Number(supply.current_stock_level ?? supply.current_stock ?? 0)
     const min = Number(supply.reorder_level ?? supply.min_stock_level ?? 0)
-
     const matchesStock =
       filterStock === "All Stocks" ||
       (filterStock === "In Stock" && current > min) ||
       (filterStock === "Low Stock" && current <= min && current > 0) ||
       (filterStock === "Out of Stock" && current <= 0)
-
-    const matchesStatus = filterStatus === "All Status" || (String(supply.status || "").toLowerCase() === String(filterStatus).toLowerCase())
-
-    return matchesSearch && matchesType && matchesLocation && matchesStock && matchesStatus
+    const matchesStatus =
+      filterStatus === "All Status" ||
+      (String(supply.status || "").toLowerCase() === String(filterStatus).toLowerCase())
+    return matchesSearch && matchesType && matchesStock && matchesStatus // removed matchesLocation
   })
 
-  const lowStockItems = supplies.filter((supply) => Number(supply.current_stock_level ?? supply.current_stock ?? 0) <= Number(supply.reorder_level ?? supply.min_stock_level ?? 0))
+  const lowStockItems = safeSupplies.filter(
+    (supply) =>
+      Number(supply.current_stock_level ?? supply.current_stock ?? 0) <=
+      Number(supply.reorder_level ?? supply.min_stock_level ?? 0)
+  )
+
+  const handlePrint = useReactToPrint({
+    contentRef: printRef,
+    documentTitle: "Supply-Inventory-Report",
+    onAfterPrint: () => setIsPrinting(false),
+  })
 
   return (
     <div className="space-y-6 p-6">
@@ -328,23 +483,9 @@ export default function InventoryPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="All Types">All Types</SelectItem>
-                    {/* Populate from categories */}
-                    {Array.from(new Set([...categories.map((c) => c.category_name), ...supplies.map((s) => s.item_type || s.category_name)])).map((t) => (
-                      <SelectItem key={t} value={t}>
+                    {typeOptions.map((t, i) => (
+                      <SelectItem key={`${t}-${i}`} value={t}>
                         {t}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select value={filterLocation} onValueChange={setFilterLocation}>
-                  <SelectTrigger className="w-full md:w-[180px]">
-                    <SelectValue placeholder="All Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="All Status">All Status</SelectItem>
-                    {Array.from(new Set(supplies.map((s) => s.location))).map((loc) => (
-                      <SelectItem key={loc} value={loc}>
-                        {loc}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -382,7 +523,7 @@ export default function InventoryPage() {
                         Add Item
                       </Button>
                     </DialogTrigger>
-                    <DialogContent className="max-w-2xl">
+                    <DialogContent size="2xl">
                       <DialogHeader>
                         <DialogTitle>Add New Supply Item</DialogTitle>
                         <DialogDescription>Add a new item to the inventory system</DialogDescription>
@@ -408,7 +549,7 @@ export default function InventoryPage() {
                                 <SelectValue placeholder="Select category" />
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="">(No category)</SelectItem>
+                                <SelectItem value="none">(No category)</SelectItem> {/* changed value */}
                                 {categories.map((c) => (
                                   <SelectItem key={c.category_id} value={String(c.category_id)}>
                                     {c.category_name}
@@ -423,6 +564,7 @@ export default function InventoryPage() {
                           <Label htmlFor="description">Description</Label>
                           <Textarea
                             id="description"
+                            className="resize-none"
                             value={newSupply.description}
                             onChange={(e) => setNewSupply((prev) => ({ ...prev, description: e.target.value }))}
                             placeholder="Detailed description of the supply item..."
@@ -462,16 +604,6 @@ export default function InventoryPage() {
                           </div>
                         </div>
 
-                        <div className="space-y-2">
-                          <Label htmlFor="location">Storage Location</Label>
-                          <Input
-                            id="location"
-                            value={newSupply.location}
-                            onChange={(e) => setNewSupply((prev) => ({ ...prev, location: e.target.value }))}
-                            placeholder="e.g., Main Warehouse, Cebu Storage"
-                          />
-                        </div>
-
                         {error && <div className="text-red-500">{error}</div>}
 
                         <div className="flex justify-end space-x-2 pt-4">
@@ -487,10 +619,19 @@ export default function InventoryPage() {
                   </Dialog>
                   <Dialog>
                                         <DialogTrigger asChild>
-                      <Button className="whitespace-nowrap">
-                        <FileText className="h-4 w-4 mr-2" />
-                        Supply Report
-                      </Button>
+
+        <Button
+          onClick={() => {
+            setIsPrinting(true)
+            handlePrint()
+          }}
+          disabled={isPrinting || supplies.length === 0}
+          variant="secondary"
+          className="print-hide bg-primary"
+        >
+          {isPrinting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <FileText className="h-4 w-4 mr-2" />}
+          {isPrinting ? "Preparing..." : "Supply Report"}
+        </Button>
                     </DialogTrigger>
                   </Dialog>
                 </div>
@@ -500,6 +641,7 @@ export default function InventoryPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead>Item Code</TableHead>
                     <TableHead>Item Name</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Current Stock</TableHead>
@@ -513,48 +655,51 @@ export default function InventoryPage() {
                 <TableBody>
                   {filteredSupplies.map((supply) => (
                     <TableRow key={supply.supply_id}>
+                      <TableCell className="font-mono text-xs">{supply.item_code}</TableCell>
                       <TableCell className="font-medium">{supply.item_name}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{supply.category_name || supply.item_type}</Badge>
-                      </TableCell>
+                      <TableCell><Badge variant="outline">{supply.category_name || supply.item_type}</Badge></TableCell>
                       <TableCell className="font-medium">{supply.current_stock_level ?? supply.current_stock}</TableCell>
                       <TableCell>{supply.reorder_level ?? supply.min_stock_level}</TableCell>
                       <TableCell>{supply.unit_of_measure}</TableCell>
                       <TableCell>
-                        {Number(supply.current_stock_level ?? supply.current_stock ?? 0) <= Number(supply.reorder_level ?? supply.min_stock_level ?? 0) ? (
-                          <Badge variant="destructive" className="flex items-center space-x-1">
-                            <AlertTriangle className="h-3 w-3 mr-1" />
-                            <span>Low Stock</span>
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary">In Stock</Badge>
-                        )}
+                        {Number(supply.current_stock_level ?? supply.current_stock ?? 0) <= Number(supply.reorder_level ?? supply.min_stock_level ?? 0)
+                          ? <Badge variant="destructive" className="flex items-center space-x-1"><AlertTriangle className="h-3 w-3 mr-1" />Low Stock</Badge>
+                          : <Badge variant="secondary">In Stock</Badge>}
                       </TableCell>
-                      
                       <TableCell>
-                        <Dialog open={restockOpen && restockSupplyId === supply.supply_id} onOpenChange={(open) => {
-                          if (!open) {
-                            setRestockOpen(false)
-                            setRestockSupplyId(null)
-                            setRestockQty("")
-                            setRestockNotes("")
-                          }
-                        }}>
+                        <Dialog
+                          open={restockOpen && restockSupplyId === supply.supply_id}
+                          onOpenChange={(o) => {
+                            if (!o) {
+                              setRestockOpen(false)
+                              setRestockSupplyId(null)
+                              setRestockQty("")
+                              setRestockNotes("")
+                            }
+                          }}
+                        >
                           <DialogTrigger asChild>
-                            <Button size="sm" onClick={() => { setRestockOpen(true); setRestockSupplyId(supply.supply_id); }}>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setRestockOpen(true)
+                                setRestockSupplyId(supply.supply_id)
+                              }}
+                            >
                               Restock
                             </Button>
                           </DialogTrigger>
-                          <DialogContent className="max-w-lg">
+                          <DialogContent className="max-w-md">
                             <DialogHeader>
-                              <DialogTitle>Restock {supply.item_name}</DialogTitle>
-                              <DialogDescription>Enter quantity to add to stock</DialogDescription>
+                              <DialogTitle>Restock: {supply.item_name}</DialogTitle>
+                              <DialogDescription>Increase stock level for this item</DialogDescription>
                             </DialogHeader>
                             <form onSubmit={(e) => handleRestockSubmit(e, supply.supply_id)} className="space-y-4">
                               <div className="space-y-2">
-                                <Label htmlFor={`restock_qty_${supply.supply_id}`}>Quantity *</Label>
+                                <Label htmlFor="restockQty">Quantity *</Label>
                                 <Input
-                                  id={`restock_qty_${supply.supply_id}`}
+                                  id="restockQty"
                                   type="number"
                                   min={1}
                                   value={restockQty}
@@ -563,21 +708,30 @@ export default function InventoryPage() {
                                 />
                               </div>
                               <div className="space-y-2">
-                                <Label htmlFor={`restock_notes_${supply.supply_id}`}>Notes</Label>
+                                <Label htmlFor="restockNotes">Notes</Label>
                                 <Textarea
-                                  id={`restock_notes_${supply.supply_id}`}
+                                  id="restockNotes"
                                   value={restockNotes}
                                   onChange={(e) => setRestockNotes(e.target.value)}
-                                  placeholder="Optional notes..."
+                                  placeholder="Optional notes (e.g. supplier, batch)"
                                 />
                               </div>
-                              {error && <div className="text-red-500">{error}</div>}
-                              <div className="flex justify-end space-x-2 pt-4">
-                                <Button type="button" variant="outline" onClick={() => { setRestockOpen(false); setRestockSupplyId(null); }}>
+                              {error && <div className="text-red-500 text-sm">{error}</div>}
+                              <div className="flex justify-end space-x-2 pt-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => {
+                                    setRestockOpen(false)
+                                    setRestockSupplyId(null)
+                                    setRestockQty("")
+                                    setRestockNotes("")
+                                  }}
+                                >
                                   Cancel
                                 </Button>
-                                <Button type="submit" disabled={loading}>
-                                  {loading ? "Processing..." : "Confirm Restock"}
+                                <Button type="submit" disabled={!restockQty || loading}>
+                                  {loading ? "Saving..." : "Add Stock"}
                                 </Button>
                               </div>
                             </form>
@@ -586,9 +740,95 @@ export default function InventoryPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex space-x-2">
-                          <Button variant="ghost" size="sm" onClick={() => { setSelectedSupply(supply); loadSupplyTransactions(supply.supply_id); }}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => openEdit(supply)}
+                            title="Edit"
+                          >
                             <Edit className="h-4 w-4" />
                           </Button>
+                          <Dialog
+                            open={usageOpen && usageSupply?.supply_id === supply.supply_id}
+                            onOpenChange={(o) => {
+                              if (!o) {
+                                setUsageOpen(false)
+                                setUsageSupply(null)
+                              }
+                            }}
+                          >
+                            <DialogTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  setUsageOpen(true)
+                                  setUsageSupply(supply)
+                                }}
+                              >
+                                Use
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-w-lg">
+                              <DialogHeader>
+                                <DialogTitle>Record Usage - {supply.item_name}</DialogTitle>
+                                <DialogDescription>Track supply consumption with patient & phase context</DialogDescription>
+                              </DialogHeader>
+                              <form onSubmit={submitUsage} className="space-y-4">
+                                <div>
+                                  <Label>Quantity Used *</Label>
+                                  <Input
+                                    type="number"
+                                    min={1}
+                                    value={usageQty}
+                                    onChange={(e) => setUsageQty(e.target.value)}
+                                    required
+                                  />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div>
+                                    <Label>Patient ID</Label>
+                                    <Input
+                                      value={usagePatientId}
+                                      onChange={(e) => setUsagePatientId(e.target.value)}
+                                      placeholder="Optional"
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label>Phase (1-3)</Label>
+                                    <Input
+                                      value={usagePhaseId}
+                                      onChange={(e) => setUsagePhaseId(e.target.value)}
+                                      placeholder="Optional"
+                                    />
+                                  </div>
+                                </div>
+                                <div>
+                                  <Label>Event Type</Label>
+                                  <Input
+                                    value={usageEvent}
+                                    onChange={(e) => setUsageEvent(e.target.value)}
+                                    placeholder="e.g. Ear Impression, Fitting"
+                                  />
+                                </div>
+                                <div className="flex justify-end space-x-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setUsageOpen(false)
+                                      setUsageSupply(null)
+                                    }}
+                                  >
+                                    Cancel
+                                  </Button>
+                                  <Button type="submit" disabled={!usageQty}>
+                                    Save
+                                  </Button>
+                                </div>
+                              </form>
+                            </DialogContent>
+                          </Dialog>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -616,11 +856,18 @@ export default function InventoryPage() {
                     <TableHead>Performed By</TableHead>
                     <TableHead>Related Event</TableHead>
                     <TableHead>Comments</TableHead>
+                    <TableHead>Patient</TableHead>
+                    <TableHead>Phase</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {transactions.map((transaction) => (
-                    <TableRow key={transaction.transaction_id}>
+                  {transactions.map((transaction, i) => (
+                    <TableRow
+                      key={
+                        transaction.transaction_id ??
+                        `${transaction.supply_id}-${transaction.transaction_date}-${i}`
+                      }
+                    >
                       <TableCell>{new Date(transaction.transaction_date).toLocaleString()}</TableCell>
                       <TableCell className="font-medium">{transaction.item_name || transaction.item_name}</TableCell>
                       <TableCell>
@@ -645,6 +892,8 @@ export default function InventoryPage() {
                         <Badge variant="outline">{transaction.related_event_type}</Badge>
                       </TableCell>
                       <TableCell className="max-w-xs truncate">{transaction.notes || transaction.comments}</TableCell>
+                      <TableCell>{transaction.patient_id || "-"}</TableCell>
+                      <TableCell>{transaction.phase_id || "-"}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -653,6 +902,241 @@ export default function InventoryPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Hidden print content */}
+      <div style={{ display: "none" }}>
+        {supplies.length > 0 && (
+          <SupplyPrintReport
+            ref={printRef}
+            supplies={supplies}
+            meta={{
+              generatedAt: new Date().toLocaleString(),
+              filters: { searchTerm, filterType, filterStock },
+              total: supplies.length,
+              low: lowStockItems.length,
+            }}
+          />
+        )}
+      </div>
+
+      {/* Edit Supply dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Supply</DialogTitle>
+            <DialogDescription>Update name, type, reorder level, and unit</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleUpdateSupply} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit_item_name">Name *</Label>
+              <Input
+                id="edit_item_name"
+                value={editData.item_name}
+                onChange={(e) => setEditData((p) => ({ ...p, item_name: e.target.value }))}
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit_category">Category</Label>
+              <Select
+                value={String(editData.category_id)}
+                onValueChange={(value) => setEditData((p) => ({ ...p, category_id: value }))}
+              >
+                <SelectTrigger id="edit_category">
+                  <SelectValue placeholder="Select category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">(No category)</SelectItem>
+                  {categories.map((c) => (
+                    <SelectItem key={c.category_id} value={String(c.category_id)}>
+                      {c.category_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_reorder_level">Reorder Level *</Label>
+                <Input
+                  id="edit_reorder_level"
+                  type="number"
+                  value={editData.reorder_level}
+                  onChange={(e) => setEditData((p) => ({ ...p, reorder_level: e.target.value }))}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_unit">Unit of Measure *</Label>
+                <Input
+                  id="edit_unit"
+                  value={editData.unit_of_measure}
+                  onChange={(e) => setEditData((p) => ({ ...p, unit_of_measure: e.target.value }))}
+                  required
+                />
+              </div>
+            </div>
+
+            {error && <div className="text-red-500 text-sm">{error}</div>}
+
+            <div className="flex justify-end space-x-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={loading}>
+                {loading ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
+
+// --- Printable report component (similar style to dashboard) ---
+interface SupplyPrintMeta {
+  generatedAt: string
+  filters: { searchTerm: string; filterType: string; filterStock: string }
+  total: number
+  low: number
+}
+interface SupplyPrintProps {
+  supplies: any[]
+  meta: SupplyPrintMeta
+}
+const SupplyPrintReport = React.forwardRef<HTMLDivElement, SupplyPrintProps>(({ supplies, meta }, ref) => {
+  const lowItems = supplies.filter(
+    (s) =>
+      Number(s.current_stock_level ?? s.current_stock ?? 0) <=
+      Number(s.reorder_level ?? s.min_stock_level ?? 0)
+  )
+
+  return (
+    <div ref={ref} style={{ padding: "18mm", fontFamily: "Arial, sans-serif", fontSize: "11pt", lineHeight: 1.4 }}>
+      <style>{`
+        .spr-h1{font-size:22pt;color:#3a416f;border-bottom:2px solid #3a416f;margin:0 0 16px;padding-bottom:4px;}
+        .spr-h2{font-size:15pt;color:#f95759;margin:24px 0 10px;border-bottom:1px solid #c9cbcb;padding-bottom:2px;page-break-after:avoid;}
+        .spr-table{width:100%;border-collapse:collapse;margin-top:8px;font-size:10pt;}
+        .spr-table th,.spr-table td{border:1px solid #ddd;padding:6px;text-align:left;}
+        .spr-table th{background:#f2f2f2;}
+        .spr-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:12px 0 20px;}
+        .spr-kpi{border:1px solid #c9cbcb;border-radius:6px;padding:10px;text-align:center;}
+        .spr-kpi-title{font-size:9pt;text-transform:uppercase;color:#555;margin-bottom:4px;}
+        .spr-kpi-val{font-size:20pt;font-weight:bold;color:#3a416f;}
+        @page { margin: 15mm; }
+      `}</style>
+
+      <h1 className="spr-h1">Supply Inventory Report</h1>
+      <p style={{ marginBottom: "10px" }}>
+        <strong>Generated:</strong> {meta.generatedAt}
+        <br />
+        <strong>Filters:</strong>{" "}
+        {[
+          meta.filters.searchTerm ? `Search="${meta.filters.searchTerm}"` : null,
+          meta.filters.filterType !== "All Types" ? `Type="${meta.filters.filterType}"` : null,
+          meta.filters.filterStock !== "All Stocks" ? `Stock="${meta.filters.filterStock}"` : null,
+        ]
+          .filter(Boolean)
+          .join("; ") || "None"}
+      </p>
+
+      <div className="spr-grid">
+        <div className="spr-kpi">
+          <div className="spr-kpi-title">Total Items</div>
+            <div className="spr-kpi-val">{meta.total}</div>
+        </div>
+        <div className="spr-kpi">
+          <div className="spr-kpi-title">Low Stock Items</div>
+          <div className="spr-kpi-val" style={{ color: "#f95759" }}>{meta.low}</div>
+        </div>
+        <div className="spr-kpi">
+          <div className="spr-kpi-title">In Stock</div>
+          <div className="spr-kpi-val" style={{ color: "#0d6efd" }}>
+            {supplies.filter(
+              (s) =>
+                Number(s.current_stock_level ?? s.current_stock ?? 0) >
+                Number(s.reorder_level ?? s.min_stock_level ?? 0)
+            ).length}
+          </div>
+        </div>
+      </div>
+
+      <h2 className="spr-h2">Inventory Details</h2>
+      <table className="spr-table">
+        <thead>
+          <tr>
+            <th>Code</th>
+            <th>Name</th>
+            <th>Type / Category</th>
+            <th>Current</th>
+            <th>Min</th>
+            <th>Unit</th>
+            <th>Status</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {supplies.map((s, i) => {
+            const current = Number(s.current_stock_level ?? s.current_stock ?? 0)
+            const min = Number(s.reorder_level ?? s.min_stock_level ?? 0)
+            const status = current <= 0 ? "OUT" : current <= min ? "LOW" : "OK"
+            return (
+              <tr key={i}>
+                <td>{s.item_code || "-"}</td>
+                <td>{s.item_name}</td>
+                <td>{s.category_name || s.item_type || "-"}</td>
+                <td>{current}</td>
+                <td>{min}</td>
+                <td>{s.unit_of_measure || "-"}</td>
+                <td style={{ color: status === "LOW" ? "#d9534f" : status === "OUT" ? "#b02d2d" : "#198754" }}>
+                  {status}
+                </td>
+                <td>{(s.description || "").slice(0, 80)}</td>
+              </tr>
+            )
+          })}
+          {supplies.length === 0 && (
+            <tr>
+              <td colSpan={8}>No supplies found for current filters.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      <h2 className="spr-h2">Low Stock Items</h2>
+      <table className="spr-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Current</th>
+            <th>Min</th>
+            <th>Unit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lowItems.map((s, i) => {
+            const current = Number(s.current_stock_level ?? s.current_stock ?? 0)
+            const min = Number(s.reorder_level ?? s.min_stock_level ?? 0)
+            return (
+              <tr key={i}>
+                <td>{s.item_name}</td>
+                <td style={{ color: "#d9534f", fontWeight: 600 }}>{current}</td>
+                <td>{min}</td>
+                <td>{s.unit_of_measure || "-"}</td>
+              </tr>
+            )
+          })}
+          {lowItems.length === 0 && (
+            <tr>
+              <td colSpan={4}>No items are currently at or below minimum level.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+})
+SupplyPrintReport.displayName = "SupplyPrintReport"

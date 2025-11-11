@@ -52,16 +52,23 @@ function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
   )
 }
 
-function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
+function TableRow({ className, children, ...props }: React.ComponentProps<"tr">) {
+  // Filter out pure-whitespace text children to avoid invalid text nodes inside <tr>
+  const filteredChildren = React.Children.toArray(children).filter((c) => {
+    return !(typeof c === "string" && /^\s*$/.test(c))
+  })
+
   return (
-  <tr 
+    <tr
       data-slot="table-row"
       className={cn(
         "hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors",
         className
       )}
       {...props}
-    />
+    >
+      {filteredChildren}
+    </tr>
   )
 }
 

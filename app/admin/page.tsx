@@ -6,6 +6,7 @@ import axios from "axios"
 import type React from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -23,7 +24,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 // --- ⭐️ START: IMPORT UPDATED ⭐️ ---
 // Make sure CheckCircle is imported (it was already in your file)
-import { Users, Shield, Activity, Plus, Edit, Trash2, AlertTriangle, CheckCircle, Eye } from "lucide-react"
+import { Users, Shield, Activity, Plus, Edit, Ban, AlertTriangle, CheckCircle, Eye } from "lucide-react"
 // --- ⭐️ END: IMPORT UPDATED ⭐️ ---
 
 // --- API and Constants ---
@@ -142,12 +143,28 @@ export default function AdminPage() {
     handleLimitChange: _handleAuditLimitChange,
   } = usePagination(50)
 
+  // NEW: derived pagination ranges
+  const userStartItem = users.length === 0 ? 0 : (userPage - 1) * userLimit + 1
+  const userEndItem = Math.min(userPage * userLimit, userTotal)
+  const auditStartItem = auditLogs.length === 0 ? 0 : (auditPage - 1) * auditLimit + 1
+  const auditEndItem = Math.min(auditPage * auditLimit, auditTotal)
+
   // Audit filter state
   const [auditSearch, setAuditSearch] = useState<string>("")
   const [auditActionFilter, setAuditActionFilter] = useState<string>("all")
   const [auditTableFilter, setAuditTableFilter] = useState<string>("all")
   const [auditModalOpen, setAuditModalOpen] = useState(false)
   const [selectedAuditLog, setSelectedAuditLog] = useState<any | null>(null)
+
+  // --- User filters state ---
+  const [userFilters, setUserFilters] = useState<{ search?: string; role?: string; status?: string }>({
+    search: "",
+    role: "all",
+    status: "all",
+  })
+  const [userSearch, setUserSearch] = useState<string>("")
+  const [userRoleFilter, setUserRoleFilter] = useState<string>("all")
+  const [userStatusFilter, setUserStatusFilter] = useState<string>("all")
 
   // Add user dialog state
   const [isAddUserOpen, setIsAddUserOpen] = useState(false)
@@ -200,11 +217,15 @@ export default function AdminPage() {
   // --- Data Fetching ---
 
   // Fetch users from backend and decrypt display fields
-  const fetchUsers = async (page = 1, limit = 10) => {
+  const fetchUsers = async (page = 1, limit = 10, filters: any = {}) => {
     setLoadingUsers(true)
     setFetchError(null)
     try {
-      const res = await api.get("/api/users", { headers: getAuthHeaders(), params: { page, limit } })
+      const params: any = { page, limit }
+      if (filters.search) params.search = filters.search
+      if (filters.role && filters.role !== "all") params.role = FRONTEND_TO_BACKEND_ROLE[filters.role] ?? filters.role
+      if (filters.status && filters.status !== "all") params.is_active = filters.status === "active"
+      const res = await api.get("/api/users", { headers: getAuthHeaders(), params })
 
       let payload: any = null
       if (res.data?.encrypted_data) {
@@ -256,7 +277,7 @@ export default function AdminPage() {
       const params: any = { page, limit }
       if (filters.search) params.search = filters.search
       if (filters.action && filters.action !== "all") params.action_type = filters.action
-      if (filters.table && filters.table !== "all") params.table_name = filters.table
+      // if (filters.table && filters.table !== "all") params.table_name = filters.table
 
       const res = await api.get("/api/audit", { headers: getAuthHeaders(), params })
 
@@ -529,7 +550,6 @@ export default function AdminPage() {
       setIsOpen(false)
     } catch (err: any)
 {
-      console.error("Create user failed", err)
       setError(err?.response?.data?.message ?? err.message ?? "Failed to create user")
     } finally {
       setCreating(false)
@@ -583,7 +603,6 @@ export default function AdminPage() {
       setUserToEdit(null)
       fetchUsers(userPage, userLimit) // Refresh table
     } catch (err: any) {
-      console.error("Update user failed", err)
       setEditUserError(err?.response?.data?.message ?? err.message ?? "Failed to update user")
     } finally {
       setEditingUser(false)
@@ -644,33 +663,47 @@ export default function AdminPage() {
 
   const handleUserLimitChange = (limitStr: string) => {
     const { newLimit, newPage } = _handleUserLimitChange(Number(limitStr))
-    fetchUsers(newPage, newLimit)
+    fetchUsers(newPage, newLimit, userFilters)
   }
 
   const handleUserPageChange = (page: number) => {
     const newPage = _handleUserPageChange(page)
-    fetchUsers(newPage, userLimit)
+    fetchUsers(newPage, userLimit, userFilters)
   }
 
   // --- Audit Filter Handlers ---
   const handleAuditSearch = () => {
-    // Reset to page 1 and fetch with all current filters
     _handleAuditPageChange(1)
     fetchAuditLogs(1, auditLimit, {
       search: auditSearch,
       action: auditActionFilter,
-      table: auditTableFilter,
     })
   }
 
   const handleAuditFilterClear = () => {
-    // Reset state
     setAuditSearch("")
     setAuditActionFilter("all")
-    setAuditTableFilter("all")
-    // Reset to page 1 and fetch with no filters
     _handleAuditPageChange(1)
     fetchAuditLogs(1, auditLimit)
+  }
+
+  // User filter handlers
+  const handleUserSearch = () => {
+    const filters = { search: userSearch, role: userRoleFilter, status: userStatusFilter }
+    setUserFilters(filters)
+    // reset to page 1
+    _handleUserPageChange(1)
+    fetchUsers(1, userLimit, filters)
+  }
+
+  const handleUserFilterClear = () => {
+    setUserSearch("")
+    setUserRoleFilter("all")
+    setUserStatusFilter("all")
+    const filters = { search: "", role: "all", status: "all" }
+    setUserFilters(filters)
+    _handleUserPageChange(1)
+    fetchUsers(1, userLimit, filters)
   }
 
   // --- ⭐️ START: Helper for confirmation dialog ⭐️ ---
@@ -699,7 +732,6 @@ export default function AdminPage() {
             <h1 className="text-3xl font-bold tracking-tight">Admin Panel</h1>
           </div>
         </div>
-        {/* Add User Button is here, dialog is below */}
       </div>
 
       {/* --- Add User Dialog (Now with accessible labels) --- */}
@@ -980,111 +1012,176 @@ export default function AdminPage() {
         </TabsList>
 
         <TabsContent value="users" className="space-y-4">
+          {/* Optional: keep external heading, or remove for cleaner card-only UI */}
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold">Manage Users</h3>
             <Button onClick={() => setIsAddUserOpen(true)}><Plus className="mr-2 h-4 w-4" /> Add user</Button>
           </div>
 
+          {/* Filters remain unchanged */}
+          <div className="flex flex-col md:flex-row md:items-end md:space-x-2 gap-3">
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="userSearch">Search</Label>
+              <Input id="userSearch" placeholder="Search by name, username or email..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} />
+            </div>
+            <div className="md:max-w-[200px]">
+              <Label htmlFor="userRole">Role</Label>
+              <Select value={userRoleFilter} onValueChange={setUserRoleFilter}>
+                <SelectTrigger id="userRole"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Roles</SelectItem>
+                  {Object.keys(FRONTEND_TO_BACKEND_ROLE).map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="max-w-[1600px]">
+              <Label htmlFor="userStatus">Status</Label>
+              <Select value={userStatusFilter} onValueChange={setUserStatusFilter}>
+                <SelectTrigger id="userStatus"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="inactive">Inactive</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Button onClick={handleUserSearch}>Search</Button>
+              <Button variant="secondary" onClick={handleUserFilterClear}>Clear</Button>
+            </div>
+          </div>
+
           <Card>
-            <CardContent className="p-0">
+            <CardHeader>
+              <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+                 <div>
+                   <CardTitle>Users ({userTotal})</CardTitle>
+                   <CardDescription>Manage active and inactive users</CardDescription>
+                 </div>
+                 <div className="flex flex-wrap items-center gap-4">
+                   <div className="text-sm text-muted-foreground">
+                     {userTotal === 0
+                       ? "No results"
+                       : `Showing ${userStartItem}–${userEndItem} of ${userTotal}`}
+                   </div>
+                   <div className="flex items-center space-x-2">
+                     <label htmlFor="userRows" className="text-sm text-muted-foreground">Rows</label>
+                     <select
+                       id="userRows"
+                       className="h-9 rounded-md border border-input bg-background px-2 text-sm focus:outline-none"
+                       value={userLimit}
+                       onChange={(e) => handleUserLimitChange(e.target.value)}
+                     >
+                       {[10,25,50].map(s => <option key={s} value={s}>{s}</option>)}
+                     </select>
+                   </div>
+                   <div className="flex items-center space-x-1">
+                     <Button
+                       variant="outline"
+                       size="sm"
+                       disabled={loadingUsers || userPage === 1}
+                       onClick={() => handleUserPageChange(userPage - 1)}
+                     >
+                       Prev
+                     </Button>
+                     <span className="px-2 text-sm">
+                       Page {userPage} / {userTotalPages}
+                     </span>
+                     <Button
+                       variant="outline"
+                       size="sm"
+                       disabled={loadingUsers || userPage === userTotalPages}
+                       onClick={() => handleUserPageChange(userPage + 1)}
+                     >
+                       Next
+                     </Button>
+                   </div>
+                 </div>
+               </div>
+            </CardHeader>
+            <CardContent>
               <Table>
                 <TableHeader>
-                  <TableRow >
+                  <TableRow>
                     <TableHead>User</TableHead>
                     <TableHead>Role</TableHead>
-                    <TableHead>Phone</TableHead> {/* ADDED */}
+                    <TableHead>Phone</TableHead>
                     <TableHead>City</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {loadingUsers && <TableRow><TableCell colSpan={5} className="text-center">Loading users...</TableCell></TableRow>}
-                  {!loadingUsers && users.length === 0 && <TableRow><TableCell colSpan={5} className="text-center">No users found.</TableCell></TableRow>}
-                  {users.map((user) => (
-                    <TableRow key={user.user_id || user.id}>
-                      <TableCell>
-                        <div>
-                          <div className="font-medium">{user.displayName || `${user.first_name} ${user.last_name}`}</div>
-                          <div className="text-sm text-muted-foreground">{user.username}</div>
-                          <div className="text-xs text-muted-foreground">{user.email}</div>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{(user.roles && user.roles[0]) || "—"}</Badge>
-                      </TableCell>
-                      <TableCell>{user.phone_number || "—"}</TableCell> {/* ADDED */}
-                      <TableCell>{user.city_assigned || user.cityAssigned || "N/A"}</TableCell>
-                      <TableCell>{user.is_active === false ? <Badge variant="secondary">Inactive</Badge> : <Badge>Active</Badge>}</TableCell>
-                      <TableCell>
-                        <div className="flex space-x-2">
-                          <Button size="sm" variant="outline" onClick={() => initiateEditUser(user)} title="Edit User">
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          {user.is_active === false ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-green-600 border-green-600 hover:text-green-700 hover:border-green-700 hover:bg-green-50"
-                              onClick={() => initiateToggleUserActiveState(user)}
-                              title="Reactivate User"
-                            >
-                              <CheckCircle className="h-4 w-4" />
-                            </Button>
-                          ) : (
-                            // Show Deactivate Button
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={() => initiateToggleUserActiveState(user)}
-                              title="Deactivate User"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </div>
+                  {loadingUsers && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="p-4 text-center text-sm text-muted-foreground">
+                        Loading users...
                       </TableCell>
                     </TableRow>
-                  ))}
+                  )}
+                  {!loadingUsers && users.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="p-4 text-center text-sm text-muted-foreground">
+                        No users found.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!loadingUsers && users.map((user) => {
+                    const name = user.displayName || `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.username
+                    return (
+                      <TableRow key={user.user_id || user.id}>
+                        <TableCell>
+                          <div className="font-medium">{name}</div>
+                          <div className="text-xs text-muted-foreground">{user.username}</div>
+                          <div className="text-xs text-muted-foreground">{user.email}</div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{(user.roles && user.roles[0]) || "—"}</Badge>
+                        </TableCell>
+                        <TableCell>{user.phone_number || "—"}</TableCell>
+                        <TableCell>{user.city_assigned || user.cityAssigned || "—"}</TableCell>
+                        <TableCell>
+                          {user.is_active === false
+                            ? <Badge variant="secondary">Inactive</Badge>
+                            : <Badge>Active</Badge>}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-2">
+                            <Button size="sm" variant="outline" onClick={() => initiateEditUser(user)}>
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            {user.is_active === false ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-green-600 border-green-600 hover:text-green-700 hover:border-green-700 hover:bg-green-50"
+                                onClick={() => initiateToggleUserActiveState(user)}
+                              >
+                                <CheckCircle className="h-4 w-4" />
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => initiateToggleUserActiveState(user)}
+                              >
+                                <Ban className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
-
-              {/* users pagination */}
-              <div className="p-4 flex items-center justify-between">
-                <div className="text-sm text-muted-foreground">
-                  Showing {users.length} of {userTotal} users
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Select onValueChange={handleUserLimitChange} value={String(userLimit)}>
-                    <SelectTrigger className="w-[120px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="10">10 / page</SelectItem>
-                      <SelectItem value="25">25 / page</SelectItem>
-                      <SelectItem value="50">50 / page</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button size="sm" variant="outline" disabled={loadingUsers || userPage <= 1} onClick={() => handleUserPageChange(userPage - 1)}>
-                    Prev
-                  </Button>
-                  <div className="text-sm px-2">
-                    Page {userPage} / {userTotalPages}
-                  </div>
-                  <Button size="sm" variant="outline" disabled={loadingUsers || userPage >= userTotalPages} onClick={() => handleUserPageChange(userPage + 1)}>
-                    Next
-                  </Button>
-                </div>
-              </div>
-
             </CardContent>
           </Card>
         </TabsContent>
 
         <TabsContent value="audit" className="space-y-4">
           <h3 className="text-lg font-semibold">System Audit Logs</h3>
-
-          {/* --- ⭐️ NEW: Audit Filters UI ⭐️ --- */}
+          {/* Filters unchanged */}
           <div className="flex flex-col md:flex-row md:items-end md:space-x-2 gap-3">
             <div className="flex-1 space-y-1">
               <Label htmlFor="auditSearch">Search</Label>
@@ -1103,24 +1200,8 @@ export default function AdminPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Actions</SelectItem>
-                  {/* --- ⭐️ START: UPDATED ACTIONS LIST ⭐️ --- */}
                   {AUDIT_ACTIONS.map(action => (
                     <SelectItem key={action} value={action}>{action}</SelectItem>
-                  ))}
-                  {/* --- ⭐️ END: UPDATED ACTIONS LIST ⭐️ --- */}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex-1 space-y-1 md:max-w-[200px]">
-              <Label htmlFor="auditTable">Table</Label>
-              <Select value={auditTableFilter} onValueChange={setAuditTableFilter}>
-                <SelectTrigger id="auditTable">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Tables</SelectItem>
-                  {AUDIT_TABLES.map(table => (
-                    <SelectItem key={table} value={table}>{table}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -1132,7 +1213,54 @@ export default function AdminPage() {
           </div>
 
           <Card>
-            <CardContent className="p-0">
+            <CardHeader>
+              <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+                 <div>
+                   <CardTitle>Audit Logs ({auditTotal})</CardTitle>
+                   <CardDescription>Recent system changes</CardDescription>
+                 </div>
+                 <div className="flex flex-wrap items-center gap-4">
+                   <div className="text-sm text-muted-foreground">
+                     {auditTotal === 0
+                       ? "No results"
+                       : `Showing ${auditStartItem}–${auditEndItem} of ${auditTotal}`}
+                   </div>
+                   <div className="flex items-center space-x-2">
+                     <label htmlFor="auditRows" className="text-sm text-muted-foreground">Rows</label>
+                     <select
+                       id="auditRows"
+                       className="h-9 rounded-md border border-input bg-background px-2 text-sm focus:outline-none"
+                       value={auditLimit}
+                       onChange={(e) => handleAuditLimitChange(e.target.value)}
+                     >
+                       {[10,25,50].map(s => <option key={s} value={s}>{s}</option>)}
+                     </select>
+                   </div>
+                   <div className="flex items-center space-x-1">
+                     <Button
+                       variant="outline"
+                       size="sm"
+                       disabled={loadingAudit || auditPage === 1}
+                       onClick={() => handleAuditPageChange(auditPage - 1)}
+                     >
+                       Prev
+                     </Button>
+                     <span className="px-2 text-sm">
+                       Page {auditPage} / {auditTotalPages}
+                     </span>
+                     <Button
+                       variant="outline"
+                       size="sm"
+                       disabled={loadingAudit || auditPage === auditTotalPages}
+                       onClick={() => handleAuditPageChange(auditPage + 1)}
+                     >
+                       Next
+                     </Button>
+                   </div>
+                 </div>
+               </div>
+            </CardHeader>
+            <CardContent>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1144,9 +1272,21 @@ export default function AdminPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {loadingAudit && <TableRow><TableCell colSpan={5} className="text-center">Loading audit logs...</TableCell></TableRow>}
-                  {!loadingAudit && auditLogs.length === 0 && <TableRow><TableCell colSpan={5} className="text-center">No audit logs found.</TableCell></TableRow>}
-                  {auditLogs.map((log, i) => {
+                  {loadingAudit && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="p-4 text-center text-sm text-muted-foreground">
+                        Loading audit logs...
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!loadingAudit && auditLogs.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="p-4 text-center text-sm text-muted-foreground">
+                        No audit logs found.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!loadingAudit && auditLogs.map((log, i) => {
                     const whenRaw = log.change_timestamp || log.created_at || log.logged_at || log.timestamp || log.created || ""
                     const whenFormatted = formatDate(whenRaw)
                     const keyFallback = `${log.table_name || "log"}-${String(log.record_id || "")}-${String(whenRaw || "")}-${i}`
@@ -1160,7 +1300,11 @@ export default function AdminPage() {
                         </TableCell>
                         <TableCell className="text-sm">{log.summary}</TableCell>
                         <TableCell className="text-center">
-                          <Button size="icon" variant="ghost" onClick={() => { setSelectedAuditLog(log); setAuditModalOpen(true); }}>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => { setSelectedAuditLog(log); setAuditModalOpen(true); }}
+                          >
                             <Eye className="h-4 w-4" />
                           </Button>
                         </TableCell>
@@ -1169,35 +1313,6 @@ export default function AdminPage() {
                   })}
                 </TableBody>
               </Table>
-
-              {/* audit pagination */}
-              <div className="p-4 flex items-center justify-between">
-                <div className="text-sm text-muted-foreground">
-                  Showing {auditLogs.length} of {auditTotal} logs
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Select onValueChange={handleAuditLimitChange} value={String(auditLimit)}>
-                    <SelectTrigger className="w-[120px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="10">10 / page</SelectItem>
-                      <SelectItem value="25">25 / page</SelectItem>
-                      <SelectItem value="50">50 / page</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button size="sm" variant="outline" disabled={loadingAudit || auditPage <= 1} onClick={() => handleAuditPageChange(auditPage - 1)}>
-                    Prev
-                  </Button>
-                  <div className="text-sm px-2">
-                    Page {auditPage} / {auditTotalPages}
-                  </div>
-                  <Button size="sm" variant="outline" disabled={loadingAudit || auditPage >= auditTotalPages} onClick={() => handleAuditPageChange(auditPage + 1)}>
-                    Next
-                  </Button>
-                </div>
-              </div>
-
             </CardContent>
           </Card>
         </TabsContent>

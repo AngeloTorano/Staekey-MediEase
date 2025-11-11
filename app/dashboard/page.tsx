@@ -14,16 +14,13 @@ import {
   ResponsiveContainer,
   Legend,
 } from "recharts";
-import { Info, LayoutDashboard, Users, MapPin, FileDown, Loader2 } from "lucide-react";
+import { Info, LayoutDashboard, Users, MapPin, Download, Loader2 } from "lucide-react";
 
 // --- NEW: Import PDF library ---
 import { useReactToPrint } from 'react-to-print';
 
 import {
   Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
   CardContent,
 } from "@/components/ui/card";
 import {
@@ -318,7 +315,7 @@ const GeographicMapChart: React.FC<{ geoData: MergedGeoData[] }> = ({ geoData })
                         <span className="font-bold text-blue-900">{city.city_count}</span>
                       </div>
                     ))
-                  ) : (
+                  ): (
                     <span className="text-xs text-gray-500">No city data available.</span>
                   )}
                 </div>
@@ -517,21 +514,8 @@ return (
             <LayoutDashboard className="h-6 w-6 text-primary" />
             <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
           </div>
-          <Button
-            id="export-pdf-button"
-            className="print-hide"
-            onClick={handlePrint}
-            disabled={isPrinting}
-          >
-            {isPrinting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <FileDown className="h-4 w-4" />
-            )}
-            {isPrinting ? "Preparing..." : "Export as PDF"}
-          </Button>
         </div>
-
+ 
         {/* KPI Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
           <KpiCard
@@ -545,55 +529,72 @@ return (
             color="text-blue-900"
           />
         </div>
-
-        {/* --- MODIFIED: Filter Bar --- */}
-        <div className="mb-2 bg-transparent print-hide flex items-center space-x-6">
-          {/* Region Filter */}
-          <div>
-            <label className="text-sm font-medium text-gray-700 mr-3">Filter by Region:</label>
-            <Select 
-              value={selectedRegion} 
-              onValueChange={(value) => {
-                setSelectedRegion(value === "all" ? "" : value);
-              }}
+ 
+        {/* --- MODIFIED: Filter Bar (filters left, export button right) --- */}
+        <div className="mb-2 bg-transparent print-hide flex items-center justify-between">
+          <div className="flex items-center space-x-6">
+           {/* Region Filter */}
+           <div>
+             <label className="text-sm font-medium text-gray-700 mr-3">Filter by Region:</label>
+             <Select 
+               value={selectedRegion} 
+               onValueChange={(value) => {
+                 setSelectedRegion(value === "all" ? "" : value);
+               }}
+             >
+               <SelectTrigger className="w-[300px]">
+                 <SelectValue placeholder="All Regions" />
+               </SelectTrigger>
+               <SelectContent>
+                 <SelectItem value="all">All Regions</SelectItem>
+                 {regions.map(region => (
+                   <SelectItem key={region} value={region}>
+                     {region}
+                   </SelectItem>
+                 ))}
+               </SelectContent>
+             </Select>
+           </div>
+           
+           {/* --- NEW: Gender Filter --- */}
+           <div>
+             <label className="text-sm font-medium text-gray-700 mr-3">Filter by Gender:</label>
+             <Select 
+               value={selectedGender} 
+               onValueChange={(value) => {
+                 setSelectedGender(value === "all" ? "" : value);
+               }}
+             >
+               <SelectTrigger className="w-[180px]">
+                 <SelectValue placeholder="All Genders" />
+               </SelectTrigger>
+               <SelectContent>
+                 <SelectItem value="all">All Genders</SelectItem>
+                 <SelectItem value="Male">Male</SelectItem>
+                 <SelectItem value="Female">Female</SelectItem>
+                 <SelectItem value="Other">Other</SelectItem>
+               </SelectContent>
+             </Select>
+           </div>
+         </div>
+         <div className="flex items-center">
+            <Button
+              id="export-pdf-button"
+              className="print-hide"
+              variant="secondary"
+              onClick={handlePrint}
+              disabled={isPrinting}
             >
-              <SelectTrigger className="w-[300px]">
-                <SelectValue placeholder="All Regions" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Regions</SelectItem>
-                {regions.map(region => (
-                  <SelectItem key={region} value={region}>
-                    {region}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          
-          {/* --- NEW: Gender Filter --- */}
-          <div>
-            <label className="text-sm font-medium text-gray-700 mr-3">Filter by Gender:</label>
-            <Select 
-              value={selectedGender} 
-              onValueChange={(value) => {
-                setSelectedGender(value === "all" ? "" : value);
-              }}
-            >
-              <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder="All Genders" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Genders</SelectItem>
-                <SelectItem value="Male">Male</SelectItem>
-                <SelectItem value="Female">Female</SelectItem>
-                <SelectItem value="Other">Other</SelectItem>
-              </SelectContent>
-            </Select>
+              {isPrinting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              {isPrinting ? "Preparing..." : "Export as PDF"}
+            </Button>
           </div>
         </div>
-
-
+ 
         {/* Top Section (Map + Region List) */}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-6">
           <div className="lg:col-span-3">
@@ -701,7 +702,7 @@ return (
                     cx="50%"
                     cy="50%"
                     outerRadius={80}
-                    label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
+                    label={({ percent = 0 }: { percent?: number }) => `${(percent * 100).toFixed(0)}%`}
                     labelLine={false}
                   >
                     {dashboardData.common_issues.map((entry, index) => (
@@ -721,7 +722,7 @@ return (
                     cx="50%"
                     cy="50%"
                     outerRadius={80}
-                    label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
+                    label={({ percent = 0 }: { percent?: number }) => `${(percent * 100).toFixed(0)}%`}
                     labelLine={false}
                   >
                     {dashboardData.common_causes.map((entry, index) => (
@@ -875,7 +876,7 @@ const DashboardPrintReport = React.forwardRef<HTMLDivElement, ReportProps>(({ da
       `}</style>
       
       {/* --- Report Content --- */}
-      <h1 className="report-h1">Dashboard Analytics Report</h1>
+      <h1 className="report-h1">Dashboard Report</h1>
       {/* --- MODIFIED: Display both filters --- */}
       <p className="report-p">
         <strong>Report Generated:</strong> {new Date().toLocaleString()}
@@ -894,10 +895,6 @@ const DashboardPrintReport = React.forwardRef<HTMLDivElement, ReportProps>(({ da
         <div className="kpi-item">
           <div className="kpi-title">Total Aids Fitted</div>
           <div className="kpi-value">{data.total_aids_fitted}</div>
-        </div>
-        <div className="kpi-item">
-          <div className="kpi-title">Phases Recorded</div>
-          <div className="kpi-value">{data.patient_funnel.length}</div>
         </div>
       </div>
 
